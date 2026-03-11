@@ -55,6 +55,52 @@ export class WireframeManager {
     /**
      * Clean up wireframe resources.
      */
+    /**
+     * Create an overlay wireframe from the undeformed base geometry.
+     * Used for deformation overlay mode: shows original geometry as wireframe
+     * on top of the deformed surface.
+     */
+    private overlayMeshes: THREE.LineSegments[] = [];
+
+    createOverlayWireframe(
+        baseGeometry: THREE.BufferGeometry,
+        scene: THREE.Scene,
+    ): void {
+        // Don't recreate if already exists
+        if (this.overlayMeshes.length > 0) return;
+
+        const edges = new THREE.EdgesGeometry(baseGeometry, 15);
+        const material = new THREE.LineBasicMaterial({
+            color: 0xffa500, // Orange for overlay distinction
+            transparent: true,
+            opacity: 0.5,
+            depthTest: true,
+        });
+
+        const overlay = new THREE.LineSegments(edges, material);
+        overlay.visible = true;
+        overlay.name = 'deform-overlay';
+        overlay.renderOrder = 2; // Render on top of everything
+
+        scene.add(overlay);
+        this.overlayMeshes.push(overlay);
+    }
+
+    /**
+     * Remove the deformation overlay wireframe.
+     */
+    clearOverlay(scene: THREE.Scene): void {
+        for (const mesh of this.overlayMeshes) {
+            scene.remove(mesh);
+            mesh.geometry.dispose();
+            (mesh.material as THREE.Material).dispose();
+        }
+        this.overlayMeshes = [];
+    }
+
+    /**
+     * Clean up all wireframe resources.
+     */
     clear(scene: THREE.Scene): void {
         for (const mesh of this.wireframeMeshes) {
             scene.remove(mesh);
@@ -62,5 +108,6 @@ export class WireframeManager {
             (mesh.material as THREE.Material).dispose();
         }
         this.wireframeMeshes = [];
+        this.clearOverlay(scene);
     }
 }

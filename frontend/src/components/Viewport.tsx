@@ -16,7 +16,9 @@ import { SceneManager } from '@/three/SceneManager';
 import { MeshManager } from '@/three/MeshManager';
 import { WireframeManager } from '@/three/WireframeManager';
 import { ContourManager } from '@/three/ContourManager';
+import { DeformationManager } from '@/three/DeformationManager';
 import { useContourEffect } from '@/hooks/useContourEffect';
+import { useDeformEffect } from '@/hooks/useDeformEffect';
 import { fetchJSON, fetchBinary, fetchBinaryMultipart } from '@/api/client';
 import { decodeTypedArray } from '@/utils/arrayUtils';
 import type {
@@ -37,12 +39,22 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const meshManagerRef = useRef<MeshManager | null>(null);
     const wireframeManagerRef = useRef<WireframeManager | null>(null);
     const contourManagerRef = useRef<ContourManager | null>(null);
+    const deformManagerRef = useRef<DeformationManager | null>(null);
     const [webglAvailable, setWebglAvailable] = useState(true);
 
     // Wire the contour pipeline
     useContourEffect({
         contourManager: contourManagerRef.current,
         meshManager: meshManagerRef.current,
+        scene: sceneManagerRef.current?.scene ?? null,
+    });
+
+    // Wire the deformation pipeline
+    useDeformEffect({
+        deformManager: deformManagerRef.current,
+        meshManager: meshManagerRef.current,
+        wireframeManager: wireframeManagerRef.current,
+        contourManager: contourManagerRef.current,
         scene: sceneManagerRef.current?.scene ?? null,
     });
 
@@ -87,6 +99,7 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         meshManagerRef.current = new MeshManager();
         wireframeManagerRef.current = new WireframeManager();
         contourManagerRef.current = new ContourManager();
+        deformManagerRef.current = new DeformationManager();
         sm.start();
 
         return () => {

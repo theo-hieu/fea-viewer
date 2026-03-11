@@ -41,10 +41,14 @@ export interface ModelState {
     // CPU-side Float64 data (authoritative, never GPU-uploaded directly)
     nodeCoords_f64: Float64Array | null;
     fieldValues_f64: Float64Array | null;
+    displacement_f64: Float64Array | null;
 
     // Field load state
     fieldLoadError: string | null;
     fieldNanCount: number;
+
+    // Deformation load state
+    deformLoadError: string | null;
 
     // Surface data for rendering
     surfaceIndices: Int32Array | null;
@@ -69,6 +73,8 @@ export interface ModelState {
     setFieldValues: (values: Float64Array | null) => void;
     setFieldLoadError: (err: string | null) => void;
     setFieldNanCount: (count: number) => void;
+    setDisplacementValues: (values: Float64Array | null) => void;
+    setDeformLoadError: (err: string | null) => void;
     setSurfaceData: (indices: Int32Array, normals: Float32Array, elementMap: Int32Array) => void;
     reset: () => void;
 }
@@ -90,6 +96,8 @@ const initialState = {
     fieldValues_f64: null,
     fieldLoadError: null,
     fieldNanCount: 0,
+    displacement_f64: null,
+    deformLoadError: null,
     surfaceIndices: null,
     surfaceNormals: null,
     surfaceElementMap: null,
@@ -115,6 +123,8 @@ export const useModelStore = create<ModelState>((set) => ({
     setFieldValues: (values) => set({ fieldValues_f64: values }),
     setFieldLoadError: (err) => set({ fieldLoadError: err }),
     setFieldNanCount: (count) => set({ fieldNanCount: count }),
+    setDisplacementValues: (values) => set({ displacement_f64: values }),
+    setDeformLoadError: (err) => set({ deformLoadError: err }),
     setSurfaceData: (indices, normals, elementMap) =>
         set({ surfaceIndices: indices, surfaceNormals: normals, surfaceElementMap: elementMap }),
     reset: () => set(initialState),
