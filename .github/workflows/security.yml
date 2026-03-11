@@ -47,7 +47,7 @@ jobs:
       # Container Scanning (trivy)
       # ----------------------------------------------------- #
       - name: Build Backend Image
-        run: docker compose -f docker-compose.yml build backend
+        run: docker compose -f docker-compose.yml build api
 
       - name: Run Trivy vulnerability scanner on Backend container
         uses: aquasecurity/trivy-action@master
