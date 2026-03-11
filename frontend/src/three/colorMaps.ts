@@ -37,6 +37,20 @@ export function createLutTexture(name: LutName): THREE.DataTexture {
 }
 
 /**
+ * Sample a LUT color at a normalized position t ∈ [0,1].
+ * Returns [r, g, b] as integers [0,255] for canvas rendering.
+ */
+export function sampleLutRGB(name: LutName, t: number): [number, number, number] {
+    const colors = getLutColors(name);
+    const idx = Math.min(Math.max(Math.round(t * 255), 0), 255) * 3;
+    return [
+        Math.round(colors[idx]! * 255),
+        Math.round(colors[idx + 1]! * 255),
+        Math.round(colors[idx + 2]! * 255),
+    ];
+}
+
+/**
  * Get raw LUT color data (256 RGB triplets as float [0,1]).
  */
 function getLutColors(name: LutName): Float32Array {

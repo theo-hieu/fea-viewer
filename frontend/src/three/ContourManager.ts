@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { createLutTexture, type LutName } from './colorMaps';
 import type { ColorMapConfig } from '@/utils/feaTypes';
 import { finiteMinMax } from '@/utils/arrayUtils';
+import type { PartMeshGroup } from './MeshManager';
 import contourVert from './shaders/contour.vert.glsl';
 import contourFrag from './shaders/contour.frag.glsl';
 
@@ -126,8 +127,49 @@ export class ContourManager {
         return this.material;
     }
 
+    /**
+     * Swap mesh materials to contour ShaderMaterial.
+     * Stores original materials for restoration.
+     */
+    private originalMaterials = new Map<string, THREE.Material | THREE.Material[]>();
+
+    swapMeshMaterials(
+        meshGroups: PartMeshGroup[],
+        contourMaterial: THREE.ShaderMaterial,
+    ): void {
+        for (const group of meshGroups) {
+            if (!this.originalMaterials.has(group.partId)) {
+                this.originalMaterials.set(group.partId, group.mesh.material);
+            }
+            group.mesh.material = contourMaterial;
+        }
+    }
+
+    /**
+     * Restore original Phong materials on all meshes.
+     */
+    restoreMeshMaterials(meshGroups: PartMeshGroup[]): void {
+        for (const group of meshGroups) {
+            const orig = this.originalMaterials.get(group.partId);
+            if (orig) {
+                group.mesh.material = orig;
+            }
+        }
+        this.originalMaterials.clear();
+    }
+
+    /**
+     * Update deformation scale on the contour material.
+     */
+    setDeformScale(scale: number): void {
+        if (this.material) {
+            this.material.uniforms['u_deform_scale']!.value = scale;
+        }
+    }
+
     dispose(): void {
         this.lutTexture.dispose();
         this.material?.dispose();
+        this.originalMaterials.clear();
     }
 }

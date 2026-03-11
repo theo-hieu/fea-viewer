@@ -15,6 +15,8 @@ import { useViewStore } from '@/store/viewStore';
 import { SceneManager } from '@/three/SceneManager';
 import { MeshManager } from '@/three/MeshManager';
 import { WireframeManager } from '@/three/WireframeManager';
+import { ContourManager } from '@/three/ContourManager';
+import { useContourEffect } from '@/hooks/useContourEffect';
 import { fetchJSON, fetchBinary, fetchBinaryMultipart } from '@/api/client';
 import { decodeTypedArray } from '@/utils/arrayUtils';
 import type {
@@ -34,7 +36,15 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const sceneManagerRef = useRef<SceneManager | null>(null);
     const meshManagerRef = useRef<MeshManager | null>(null);
     const wireframeManagerRef = useRef<WireframeManager | null>(null);
+    const contourManagerRef = useRef<ContourManager | null>(null);
     const [webglAvailable, setWebglAvailable] = useState(true);
+
+    // Wire the contour pipeline
+    useContourEffect({
+        contourManager: contourManagerRef.current,
+        meshManager: meshManagerRef.current,
+        scene: sceneManagerRef.current?.scene ?? null,
+    });
 
     const modelId = useModelStore((s) => s.modelId);
     const status = useModelStore((s) => s.status);
@@ -76,6 +86,7 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         sceneManagerRef.current = sm;
         meshManagerRef.current = new MeshManager();
         wireframeManagerRef.current = new WireframeManager();
+        contourManagerRef.current = new ContourManager();
         sm.start();
 
         return () => {

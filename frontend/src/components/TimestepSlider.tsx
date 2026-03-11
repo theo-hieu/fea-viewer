@@ -14,6 +14,7 @@ export const TimestepSlider: React.FC = () => {
     const activeFieldId = useModelStore((s) => s.activeFieldId);
     const activeTimestep = useModelStore((s) => s.activeTimestep);
     const setActiveTimestep = useModelStore((s) => s.setActiveTimestep);
+    const fieldLoadError = useModelStore((s) => s.fieldLoadError);
     const [isAnimating, setIsAnimating] = useState(false);
     const animFrameRef = useRef<number | null>(null);
 
@@ -94,9 +95,9 @@ export const TimestepSlider: React.FC = () => {
             >
                 {isAnimating ? '⏸ Pause' : '▶ Animate'}
             </button>
-            {!hasData && (
+            {(!hasData || fieldLoadError) && (
                 <div style={{ color: 'var(--accent-warning)', fontSize: 11, marginTop: 4 }}>
-                    ⚠ No data at this step
+                    ⚠ {fieldLoadError ?? 'No data at this step'}
                 </div>
             )}
         </div>

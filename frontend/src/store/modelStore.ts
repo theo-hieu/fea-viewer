@@ -42,6 +42,10 @@ export interface ModelState {
     nodeCoords_f64: Float64Array | null;
     fieldValues_f64: Float64Array | null;
 
+    // Field load state
+    fieldLoadError: string | null;
+    fieldNanCount: number;
+
     // Surface data for rendering
     surfaceIndices: Int32Array | null;
     surfaceNormals: Float32Array | null;
@@ -63,6 +67,8 @@ export interface ModelState {
     setActiveTimestep: (step: number) => void;
     setNodeCoords: (coords: Float64Array) => void;
     setFieldValues: (values: Float64Array | null) => void;
+    setFieldLoadError: (err: string | null) => void;
+    setFieldNanCount: (count: number) => void;
     setSurfaceData: (indices: Int32Array, normals: Float32Array, elementMap: Int32Array) => void;
     reset: () => void;
 }
@@ -82,6 +88,8 @@ const initialState = {
     activeTimestep: 0,
     nodeCoords_f64: null,
     fieldValues_f64: null,
+    fieldLoadError: null,
+    fieldNanCount: 0,
     surfaceIndices: null,
     surfaceNormals: null,
     surfaceElementMap: null,
@@ -105,6 +113,8 @@ export const useModelStore = create<ModelState>((set) => ({
     setActiveTimestep: (step) => set({ activeTimestep: step }),
     setNodeCoords: (coords) => set({ nodeCoords_f64: coords }),
     setFieldValues: (values) => set({ fieldValues_f64: values }),
+    setFieldLoadError: (err) => set({ fieldLoadError: err }),
+    setFieldNanCount: (count) => set({ fieldNanCount: count }),
     setSurfaceData: (indices, normals, elementMap) =>
         set({ surfaceIndices: indices, surfaceNormals: normals, surfaceElementMap: elementMap }),
     reset: () => set(initialState),

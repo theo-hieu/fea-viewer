@@ -3,7 +3,8 @@
  * =======================================
  *
  * Per 04 §3.1: grouped by field name → components.
- * Integration-point fields greyed out with warning.
+ * Integration-point fields disabled with explicit MVP warning.
+ * Unsupported field locations are never silently contoured.
  */
 
 import React from 'react';
@@ -13,6 +14,7 @@ export const FieldSelector: React.FC = () => {
     const fields = useModelStore((s) => s.fields);
     const activeFieldId = useModelStore((s) => s.activeFieldId);
     const setActiveFieldId = useModelStore((s) => s.setActiveFieldId);
+    const fieldLoadError = useModelStore((s) => s.fieldLoadError);
 
     return (
         <div className="field-selector">
@@ -29,12 +31,25 @@ export const FieldSelector: React.FC = () => {
                     >
                         {field.name}
                         {field.n_components > 1 ? ` (${field.n_components} comp)` : ''}
-                        {field.location === 'integration_point' ? ' ⚠ (int. point — N/A)' : ''}
+                        {field.location === 'integration_point' ? ' ⚠ Unsupported in MVP' : ''}
                         {field.location === 'elemental' ? ' [elem]' : ''}
                         {field.location === 'nodal' ? ' [nodal]' : ''}
                     </option>
                 ))}
             </select>
+
+            {fieldLoadError && (
+                <div style={{
+                    marginTop: 4,
+                    fontSize: 11,
+                    color: 'var(--accent-warning)',
+                    padding: '4px 6px',
+                    background: 'rgba(255,180,0,0.1)',
+                    borderRadius: 4,
+                }}>
+                    ⚠ {fieldLoadError}
+                </div>
+            )}
         </div>
     );
 };
