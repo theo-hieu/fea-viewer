@@ -36,6 +36,7 @@ Source authority:
 
 from __future__ import annotations
 
+import html
 import logging
 import uuid
 from typing import Optional
@@ -69,14 +70,21 @@ logger = logging.getLogger(__name__)
 # Identity transform constant
 # ---------------------------------------------------------------------------
 
-# 4×4 identity matrix, column-major, as Float64Array(16)
-# Per 02a §2.4: "Identity if no transform."
+# 4X4 identity matrix, column-major, as Float64Array(16)
+# Per 02a X2.4: "Identity if no transform."
 _IDENTITY_TRANSFORM_4X4 = np.eye(4, dtype=np.float64).flatten(order="F")
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def _sanitize_metadata(metadata: dict[str, str]) -> dict[str, str]:
+    """
+    Sanitize all metadata string values before insertion.
+    Avoids Cross Site Scripting when raw dictionaries extract from un-validated binaries.
+    """
+    return {k: html.escape(str(v), quote=True) for k, v in metadata.items()}
 
 def normalize(parse_result: ParseResult) -> NormalizedModel:
     """
@@ -125,9 +133,27 @@ def normalize(parse_result: ParseResult) -> NormalizedModel:
 
     # --- Step 6: Unit system ---
     unit_system = _normalize_unit_system(parse_result.metadata)
+    
+    # --- Step 7: Sanitize String Metadata ---
+    sanitized_solver_name = html.escape(parse_result.metadata.solver_name, quote=True)
+    sanitized_solver_version = html.escape(parse_result.metadata.solver_version, quote=True)
+    sanitized_title = html.escape(parse_result.metadata.title, quote=True)
+    sanitized_coordinate = html.escape(parse_result.metadata.coordinate_system, quote=True)
+    sanitized_format_version = html.escape(parse_result.metadata.format_version, quote=True)
+    
+    sanitized_metadata = ModelMetadata(
+        source_filename=parse_result.metadata.source_filename,
+        file_format=parse_result.metadata.file_format,
+        format_version=sanitized_format_version,
+        solver_name=sanitized_solver_name,
+        solver_version=sanitized_solver_version,
+        title=sanitized_title,
+        coordinate_system=sanitized_coordinate,
+        unit_system=unit_system,
+    )
 
     return NormalizedModel(
-        metadata=parse_result.metadata,
+        metadata=sanitized_metadata,
         unit_system=unit_system,
         nodes=nodes,
         elements=elements,

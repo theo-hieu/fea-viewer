@@ -87,6 +87,8 @@ def make_parse_result(
         metadata=metadata or ModelMetadata(
             source_filename="test.vtu",
             file_format="vtk_xml",
+            solver_version="Unknown",
+            title="Unknown",
         ),
         warnings=warnings or [],
         parser_backend="meshio",
@@ -684,6 +686,24 @@ class TestUnitSystem:
         assert model.unit_system.length == "mm"
         assert model.unit_system.force == "N"
         assert model.unit_system.declared_system == "SI"
+        
+    def test_xss_metadata_sanitization(self):
+        """String fields from metadata are HTML escaped before DB insert."""
+        meta = ModelMetadata(
+            source_filename="test.vtu",
+            file_format="vtk_xml",
+            solver_version="<script>alert('xss')</script>",
+            title="User & Co.",
+        )
+        pr = make_parse_result(metadata=meta)
+        model = normalize(pr)
+        
+        # Verify characters are replaced properly
+        assert "<" not in model.metadata.solver_version
+        assert "&lt;script" in model.metadata.solver_version
+        
+        # Verify title is escaped
+        assert "&amp;" in model.metadata.title
 
 
 # ===================================================================

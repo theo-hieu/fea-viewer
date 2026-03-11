@@ -1,0 +1,60 @@
+name: Security Checks
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  security-audit:
+    name: Dependency & Image Scanning
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------- #
+      # Backend Scanning (pip-audit)
+      # ----------------------------------------------------- #
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Run pip-audit on Backend
+        run: pip-audit -r backend/requirements.txt
+        # Fails the pipeline if vulnerable packages exist
+
+      # ----------------------------------------------------- #
+      # Frontend Scanning (npm audit)
+      # ----------------------------------------------------- #
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run npm audit on Frontend
+        working-directory: ./frontend
+        run: npm ci && npm audit --audit-level=high
+        # Fails the pipeline on high/critical vulnerabilities
+
+      # ----------------------------------------------------- #
+      # Container Scanning (trivy)
+      # ----------------------------------------------------- #
+      - name: Build Backend Image
+        run: docker compose -f deploy/docker-compose.yml build backend
+
+      - name: Run Trivy vulnerability scanner on Backend container
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "fea-viewer-backend:latest"
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"

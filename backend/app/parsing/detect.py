@@ -167,6 +167,10 @@ _REJECTED_SIGNATURES: list[tuple[bytes, str]] = [
     (b"\xfe\xed\xfa\xce", "macOS Mach-O 32-bit"),
     (b"\xfe\xed\xfa\xcf", "macOS Mach-O 64-bit"),
     (b"\xcf\xfa\xed\xfe", "macOS Mach-O 64-bit (reversed)"),
+    (b"<!DOCTYPE html", "HTML Document (XSS payload risk)"),
+    (b"<!doctype html", "HTML Document (XSS payload risk)"),
+    (b"<html", "HTML Document (XSS payload risk)"),
+    (b"<script", "JavaScript block (XSS payload risk)"),
 ]
 
 # Extensions recognized as VTK XML family (MVP parse-supported).
