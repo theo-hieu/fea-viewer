@@ -27,7 +27,7 @@ jobs:
         run: pip install pip-audit
 
       - name: Run pip-audit on Backend
-        run: pip-audit -r backend/requirements.txt
+        run: pip-audit backend
         # Fails the pipeline if vulnerable packages exist
 
       # ----------------------------------------------------- #
