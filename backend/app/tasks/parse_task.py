@@ -317,3 +317,53 @@ def _log_audit(
         logger.error("Parse job failed", extra=log_data)
     else:
         logger.info("Parse job completed", extra=log_data)
+
+
+# ---------------------------------------------------------------------------
+# Celery Task Entrypoint
+# ---------------------------------------------------------------------------
+import os
+import tempfile
+import traceback
+from app.tasks.celery_app import celery_app
+from app.models.db import PostgresMetadataStore
+from app.storage.s3_client import S3Client
+
+@celery_app.task(name="app.tasks.parse_task.process_upload")
+def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
+    db = PostgresMetadataStore()
+    storage = S3Client()
+
+    try:
+        # Mark as parsing
+        db.update_model_status(model_id, "parsing")
+
+        # Download from S3 to temp disk
+        raw_bytes = storage.get_object_stream(raw_key)
+        if not raw_bytes:
+            db.update_model_status(model_id, "error")
+            return {"status": "error", "error": f"Raw key {raw_key} not found in storage."}
+
+        # Create temporary file for meshio
+        fd, temp_path = tempfile.mkstemp(suffix=".vtu")
+        try:
+            with open(fd, "wb") as f:
+                f.write(raw_bytes)
+            
+            # Execute the core parse logic
+            result = run_parse_job(model_id, temp_path, filename)
+
+            if result.status == JobStatus.ERROR:
+                db.update_model_status(model_id, "error")
+            else:
+                db.update_model_status(model_id, "ready")
+
+            return {"status": result.status.value, "model_id": model_id}
+
+        finally:
+            os.unlink(temp_path)
+
+    except Exception as e:
+        logger.error(f"Unhandled exception in process_upload: {e}\n{traceback.format_exc()}")
+        db.update_model_status(model_id, "error")
+        return {"status": "error", "error": str(e)}

@@ -33,32 +33,13 @@ from app.api.v1.routes_models import (
     get_parse_queue
 )
 
-# Provide simple in-memory stubs so the MVP container can run without a real DB for now
-class StubDB:
-    def __init__(self):
-        self.models = {}
-    def get_model(self, model_id): return self.models.get(model_id)
-    def create_model(self, model_id, row): self.models[model_id] = row
-    def update_model_status(self, model_id, status): 
-        if model_id in self.models: self.models[model_id]["status"] = status
-    def get_model_tree(self, model_id): return {"assembly": {}}
-    def get_fields(self, model_id): return []
-    def get_field(self, model_id, field_id): return None
-    def get_sets(self, model_id): return []
-    def get_set(self, model_id, set_id): return None
-    def delete_model(self, model_id): self.models.pop(model_id, None)
+from app.models.db import PostgresMetadataStore
+from app.storage.s3_client import S3Client
+from app.tasks.queue import CeleryParseQueue
 
-class StubStorage:
-    def put_object(self, key, data): pass
-    def get_object_stream(self, key): return b""
-    def delete_prefix(self, prefix): pass
-
-class StubQueue:
-    def enqueue_parse(self, model_id, raw_key): pass
-
-_db = StubDB()
-_storage = StubStorage()
-_queue = StubQueue()
+_db = PostgresMetadataStore()
+_storage = S3Client()
+_queue = CeleryParseQueue()
 
 app.dependency_overrides[get_metadata_store] = lambda: _db
 app.dependency_overrides[get_object_store] = lambda: _storage
