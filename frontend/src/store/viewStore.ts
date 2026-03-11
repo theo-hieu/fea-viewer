@@ -5,6 +5,9 @@
  * Rendering state: deformation mode, pick mode, wireframe,
  * part visibility, and color map configuration.
  *
+ * Separation: this store holds TRANSIENT rendering/view controls only.
+ * Authoritative model data belongs in modelStore.
+ *
  * Per 04 §3.3: deformMode, deformScale, deformFieldId, pickMode,
  * wireframeVisible, partVisibility, colorMapConfig.
  */
@@ -35,12 +38,15 @@ export interface ViewState {
     setDeformScale: (scale: number) => void;
     setDeformFieldId: (id: string | null) => void;
     setPickMode: (mode: 'node' | 'element') => void;
+    setWireframeVisible: (visible: boolean) => void;
     toggleWireframe: () => void;
     setPartVisibility: (partId: string, visible: boolean) => void;
     setAllPartsVisible: (visible: boolean) => void;
     isolatePart: (partId: string) => void;
+    resetVisibility: () => void;
     setColorMapName: (name: ColorMapName) => void;
     setColorMapRange: (min: number, max: number) => void;
+    setColorMapConfig: (config: Partial<ColorMapConfig>) => void;
     resetView: () => void;
 }
 
@@ -58,7 +64,7 @@ const defaultColorMap: ColorMapConfig = {
 const initialViewState = {
     deformMode: 'undeformed' as const,
     deformScale: 1.0,
-    deformFieldId: null,
+    deformFieldId: null as string | null,
     pickMode: 'node' as const,
     wireframeVisible: false,
     partVisibility: {} as Record<string, boolean>,
@@ -72,6 +78,7 @@ export const useViewStore = create<ViewState>((set) => ({
     setDeformScale: (scale) => set({ deformScale: scale }),
     setDeformFieldId: (id) => set({ deformFieldId: id }),
     setPickMode: (mode) => set({ pickMode: mode }),
+    setWireframeVisible: (visible) => set({ wireframeVisible: visible }),
     toggleWireframe: () => set((s) => ({ wireframeVisible: !s.wireframeVisible })),
     setPartVisibility: (partId, visible) =>
         set((s) => ({
@@ -93,6 +100,7 @@ export const useViewStore = create<ViewState>((set) => ({
             }
             return { partVisibility: updated };
         }),
+    resetVisibility: () => set({ partVisibility: {} }),
     setColorMapName: (name) =>
         set((s) => ({
             colorMapConfig: { ...s.colorMapConfig, lut_name: name },
@@ -101,5 +109,17 @@ export const useViewStore = create<ViewState>((set) => ({
         set((s) => ({
             colorMapConfig: { ...s.colorMapConfig, min_value: min, max_value: max },
         })),
+    setColorMapConfig: (config) =>
+        set((s) => ({
+            colorMapConfig: { ...s.colorMapConfig, ...config },
+        })),
     resetView: () => set(initialViewState),
 }));
+
+// --- Derived Selectors ---
+
+/** Get IDs of all visible parts. */
+export const selectVisiblePartIds = (state: ViewState): string[] =>
+    Object.entries(state.partVisibility)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
