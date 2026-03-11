@@ -277,3 +277,161 @@ class ParseError:
     traceback_vtk: Optional[str]
     source_filename: str
     raw_file_preserved: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Normalized model types — canonical internal representation
+# ---------------------------------------------------------------------------
+# These types are the output of normalizer.py and the input to the validator
+# and storage writer. They match the schema in 02a-system-architecture.md §2.
+
+@dataclass(frozen=True)
+class NodeTable:
+    """
+    Canonical node table per 02a §2.2.
+
+    Fields:
+        count:             Number of nodes.
+        ids:               Original node IDs from source file (Int32).
+        coordinates:       Flat Float64 array [x0, y0, z0, x1, y1, z1, ...], length = 3 * count.
+        coordinate_system: Reference coordinate system (default: "global_cartesian").
+        id_to_index:       O(1) lookup: original ID → 0-based internal index.
+    """
+    count: int
+    ids: NDArray[np.int32]
+    coordinates: NDArray[np.float64]
+    coordinate_system: str
+    id_to_index: dict[int, int]
+
+
+@dataclass(frozen=True)
+class ElementTable:
+    """
+    Canonical element table per 02a §2.3 using CSR-style connectivity.
+
+    Fields:
+        count:                Number of elements.
+        ids:                  Original element IDs (Int32).
+        types:                Element type enum codes (Uint8), one per element.
+        connectivity_offsets: CSR offsets (Int32), length = count + 1.
+                              Element i's nodes are connectivity[offsets[i]:offsets[i+1]].
+        connectivity:         Flattened node *indices* (Int32) into NodeTable (not IDs).
+        id_to_index:          O(1) lookup: original ID → 0-based internal index.
+    """
+    count: int
+    ids: NDArray[np.int32]
+    types: NDArray[np.uint8]
+    connectivity_offsets: NDArray[np.int32]
+    connectivity: NDArray[np.int32]
+    id_to_index: dict[int, int]
+
+
+@dataclass(frozen=True)
+class Part:
+    """
+    Part per 02a §2.4.
+
+    Fields:
+        id:              Unique part identifier.
+        name:            Display name.
+        element_indices: Indices into ElementTable (not source IDs).
+    """
+    id: str
+    name: str
+    element_indices: NDArray[np.int32]
+
+
+@dataclass(frozen=True)
+class Instance:
+    """
+    Instance per 02a §2.4.
+
+    MVP: identity transform (4×4 affine, 16 values, column-major).
+    """
+    id: str
+    name: str
+    part_id: str
+    transform: NDArray[np.float64]  # 4×4 = 16 values, column-major
+
+
+@dataclass(frozen=True)
+class Assembly:
+    """
+    Assembly per 02a §2.4.
+
+    ASSUMPTION A7: single assembly only in MVP.
+    """
+    name: str
+    instance_ids: list[str]
+
+
+@dataclass(frozen=True)
+class NamedSet:
+    """
+    Named set per 02a §2.5.
+
+    Fields:
+        name:           Set name from source file.
+        set_type:       "node" or "element".
+        member_indices: 0-based indices into NodeTable or ElementTable.
+        source:         Origin: "file_defined" or "user_created".
+    """
+    name: str
+    set_type: str  # "node" or "element"
+    member_indices: NDArray[np.int32]
+    source: str = "file_defined"
+
+
+@dataclass(frozen=True)
+class NormalizedFieldProvenance:
+    """
+    Extended provenance per 02a §2.6 for normalized result fields.
+
+    Includes coordinate_system and field-specific warnings.
+    MVP: extrapolation_applied and averaging_applied are always False.
+    """
+    source_field_name: str
+    source_location: FieldLocation
+    extrapolation_applied: bool = False
+    averaging_applied: bool = False
+    averaging_method: Optional[str] = None
+    coordinate_system: str = "global_cartesian"
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NormalizedResultField:
+    """
+    Normalized result field per 02a §2.6.
+
+    This is the canonical field representation after normalization.
+    Location is re-validated against node/element counts.
+    """
+    id: str
+    name: str
+    location: FieldLocation
+    n_components: int
+    provenance: NormalizedFieldProvenance
+    timestep_data: list[TimestepData] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class NormalizedModel:
+    """
+    Complete normalized model per 02a §2.1.
+
+    This is the output of normalizer.normalize() and the input to the
+    validator and storage writer.
+    """
+    metadata: ModelMetadata
+    unit_system: UnitSystem
+    nodes: NodeTable
+    elements: ElementTable
+    parts: list[Part]
+    instances: list[Instance]
+    assembly: Assembly
+    node_sets: list[NamedSet]
+    element_sets: list[NamedSet]
+    result_fields: list[NormalizedResultField]
+    warnings: list[str]
+
