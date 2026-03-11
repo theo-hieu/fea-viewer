@@ -2,6 +2,10 @@ pyproject.toml
 app/__init__.py
 app/parsing/__init__.py
 app/parsing/detect.py
+app/parsing/models.py
+app/parsing/vtk_parser.py
+app/tasks/__init__.py
+app/tasks/parse_task.py
 fea_viewer_backend.egg-info/PKG-INFO
 fea_viewer_backend.egg-info/SOURCES.txt
 fea_viewer_backend.egg-info/dependency_links.txt
