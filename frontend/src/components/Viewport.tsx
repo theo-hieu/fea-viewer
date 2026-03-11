@@ -9,7 +9,7 @@
  * Per spec: raw Three.js, NOT React Three Fiber.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useModelStore } from '@/store/modelStore';
 import { useViewStore } from '@/store/viewStore';
 import { SceneManager } from '@/three/SceneManager';
@@ -19,6 +19,8 @@ import { ContourManager } from '@/three/ContourManager';
 import { DeformationManager } from '@/three/DeformationManager';
 import { useContourEffect } from '@/hooks/useContourEffect';
 import { useDeformEffect } from '@/hooks/useDeformEffect';
+import { PickingManager } from '@/three/PickingManager';
+import { InfoPanel, type PickedEntity } from '@/components/InfoPanel';
 import { fetchJSON, fetchBinary, fetchBinaryMultipart } from '@/api/client';
 import { decodeTypedArray } from '@/utils/arrayUtils';
 import type {
@@ -40,7 +42,9 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const wireframeManagerRef = useRef<WireframeManager | null>(null);
     const contourManagerRef = useRef<ContourManager | null>(null);
     const deformManagerRef = useRef<DeformationManager | null>(null);
+    const pickingManagerRef = useRef<PickingManager | null>(null);
     const [webglAvailable, setWebglAvailable] = useState(true);
+    const [pickedEntity, setPickedEntity] = useState<PickedEntity | null>(null);
 
     // Wire the contour pipeline
     useContourEffect({
@@ -100,10 +104,14 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         wireframeManagerRef.current = new WireframeManager();
         contourManagerRef.current = new ContourManager();
         deformManagerRef.current = new DeformationManager();
+        pickingManagerRef.current = new PickingManager(
+            container.clientWidth, container.clientHeight,
+        );
         sm.start();
 
         return () => {
             sm.dispose();
+            pickingManagerRef.current?.dispose();
             sceneManagerRef.current = null;
         };
     }, [webglAvailable]);
@@ -210,5 +218,86 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         );
     }
 
-    return <div ref={canvasContainerRef} style={{ width: '100%', height: '100%' }} />;
+    // Canvas click handler for GPU picking
+    const pickMode = useViewStore((s) => s.pickMode);
+    const deformMode = useViewStore((s) => s.deformMode);
+    const deformScale = useViewStore((s) => s.deformScale);
+    const surfaceElementMap = useModelStore((s) => s.surfaceElementMap);
+    const nodeCoords_f64 = useModelStore((s) => s.nodeCoords_f64);
+    const pickSceneBuiltRef = useRef<{ mode: string; gen: number }>({ mode: '', gen: 0 });
+    const geomGenRef = useRef(0);
+
+    // Track geometry generation for picking scene rebuild
+    useEffect(() => {
+        if (status === 'ready' && surfaceElementMap) {
+            geomGenRef.current += 1;
+        }
+    }, [status, surfaceElementMap]);
+
+    // Rebuild picking scene when mode or geometry changes
+    useEffect(() => {
+        const pm = pickingManagerRef.current;
+        const mm = meshManagerRef.current;
+        if (!pm || !mm || status !== 'ready' || !surfaceElementMap) return;
+
+        const geom = mm.getBaseGeometry();
+        if (!geom) return;
+
+        const key = { mode: pickMode, gen: geomGenRef.current };
+        if (pickSceneBuiltRef.current.mode === key.mode &&
+            pickSceneBuiltRef.current.gen === key.gen) return;
+
+        const nNodes = nodeCoords_f64 ? nodeCoords_f64.length / 3 : 0;
+        pm.buildPickingScene(geom, surfaceElementMap, nNodes, pickMode);
+        pickSceneBuiltRef.current = key;
+    }, [pickMode, status, surfaceElementMap, nodeCoords_f64]);
+
+    // Sync deformation scale to picking meshes
+    useEffect(() => {
+        const pm = pickingManagerRef.current;
+        if (!pm) return;
+        pm.setDeformScale(deformMode === 'undeformed' ? 0.0 : deformScale);
+    }, [deformMode, deformScale]);
+
+    // Sync picking render target size
+    useEffect(() => {
+        const pm = pickingManagerRef.current;
+        const sm = sceneManagerRef.current;
+        if (!pm || !sm) return;
+        const handleResize = () => {
+            const c = sm.renderer.domElement;
+            pm.resize(c.width, c.height);
+        };
+        handleResize();
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, [webglAvailable]);
+
+    const onCanvasClick = useCallback(
+        (e: React.MouseEvent<HTMLDivElement>) => {
+            const pm = pickingManagerRef.current;
+            const sm = sceneManagerRef.current;
+            if (!pm || !sm || status !== 'ready') return;
+
+            const canvas = sm.renderer.domElement;
+            const rect = canvas.getBoundingClientRect();
+            const dpr = sm.renderer.getPixelRatio();
+            const x = Math.round((e.clientX - rect.left) * dpr);
+            const y = Math.round((e.clientY - rect.top) * dpr);
+
+            const result = pm.pick(sm.renderer, sm.camera, x, y, pickMode);
+            setPickedEntity(result ? { mode: result.mode, id: result.id } : null);
+        },
+        [pickMode, status],
+    );
+
+    return (
+        <div
+            ref={canvasContainerRef}
+            onClick={onCanvasClick}
+            style={{ width: '100%', height: '100%', position: 'relative' }}
+        >
+            <InfoPanel pickedEntity={pickedEntity} />
+        </div>
+    );
 };

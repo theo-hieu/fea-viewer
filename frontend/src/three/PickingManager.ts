@@ -183,7 +183,7 @@ export class PickingManager {
 
 // --- ID Encoding/Decoding (24-bit → RGB) ---
 
-function encodeId(id: number): [number, number, number] {
+export function encodeId(id: number): [number, number, number] {
     return [
         ((id >> 16) & 0xFF) / 255,
         ((id >> 8) & 0xFF) / 255,
@@ -191,6 +191,6 @@ function encodeId(id: number): [number, number, number] {
     ];
 }
 
-function decodeId(r: number, g: number, b: number): number {
+export function decodeId(r: number, g: number, b: number): number {
     return (r << 16) | (g << 8) | b;
 }
