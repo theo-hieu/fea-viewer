@@ -16,8 +16,8 @@ import { createLutTexture, type LutName } from './colorMaps';
 import type { ColorMapConfig } from '@/utils/feaTypes';
 import { finiteMinMax } from '@/utils/arrayUtils';
 import type { PartMeshGroup } from './MeshManager';
-import contourVert from './shaders/contour.vert.glsl';
-import contourFrag from './shaders/contour.frag.glsl';
+import contourVert from './shaders/contour.vert.glsl?raw';
+import contourFrag from './shaders/contour.frag.glsl?raw';
 
 export class ContourManager {
     private lutTexture: THREE.DataTexture;

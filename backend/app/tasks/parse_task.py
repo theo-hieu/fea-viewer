@@ -42,6 +42,15 @@ from app.parsing.vtk_parser import parse_vtk
 logger = logging.getLogger(__name__)
 
 
+def _safe_log(level: str, message: str, **extra: Any) -> None:
+    """Best-effort structured logging that never breaks task execution."""
+    try:
+        getattr(logger, level)(message, extra=extra)
+    except Exception:
+        fallback = ", ".join(f"{key}={value!r}" for key, value in extra.items())
+        logger.log(getattr(logging, level.upper(), logging.INFO), f"{message} | {fallback}")
+
+
 # ---------------------------------------------------------------------------
 # Status & progress types
 # ---------------------------------------------------------------------------
@@ -123,6 +132,32 @@ In tests: appends to a list for assertion.
 """
 
 
+import redis
+from app.config import settings
+
+def redis_publisher_factory(model_id: str):
+    """Creates a publisher that sends events to a Redis channel for this model."""
+    r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    channel = f"parse_progress:{model_id}"
+    
+    def publish(event: ProgressEvent) -> None:
+        try:
+            # The frontend expects status/progress/message/warnings_count
+            # We map the internal ProgressEvent to the format the frontend expects in UploadPanel.tsx
+            msg = {
+                "model_id": model_id,
+                "status": "parsing" if event.stage != ProgressStage.COMPLETE and event.stage != ProgressStage.ERROR else ("ready" if event.stage == ProgressStage.COMPLETE else "error"),
+                "progress": event.progress_pct / 100.0,
+                "message": event.message,
+                "warnings_count": event.detail.get("warnings_count", 0) if event.detail else 0
+            }
+            r.publish(channel, json.dumps(msg))
+        except Exception as e:
+            print(f"Failed to publish progress event: {e}")
+        
+    return publish
+
+
 def null_publisher(event: ProgressEvent) -> None:
     """No-op publisher for use when no Redis connection is available."""
     pass
@@ -177,10 +212,7 @@ def run_parse_job(
         try:
             publish(event)
         except Exception as pub_exc:
-            logger.warning(
-                "Failed to publish progress event",
-                extra={"model_id": model_id, "stage": stage.value, "error": str(pub_exc)},
-            )
+            _safe_log("warning", "Failed to publish progress event", model_id=model_id, stage=stage.value, error=str(pub_exc))
 
     # --- Step 1: Format detection ---
     emit(ProgressStage.DETECTING, 5, "Detecting file format...")
@@ -329,41 +361,127 @@ from app.tasks.celery_app import celery_app
 from app.models.db import PostgresMetadataStore
 from app.storage.s3_client import S3Client
 
+from app.parsing.normalizer import normalize
+from app.parsing.validator import validate
+from app.parsing.surface_extractor import extract_surface
+from app.parsing.storage_writer import write_model
+
 @celery_app.task(name="app.tasks.parse_task.process_upload")
 def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
+    _safe_log("info", "Parse task picked up", model_id=model_id, raw_key=raw_key, uploaded_filename=filename)
     db = PostgresMetadataStore()
     storage = S3Client()
+    publish = redis_publisher_factory(model_id)
 
+    temp_path = None
     try:
         # Mark as parsing
+        _safe_log("info", "Writing final model status", model_id=model_id, status="parsing")
         db.update_model_status(model_id, "parsing")
 
         # Download from S3 to temp disk
         raw_bytes = storage.get_object_stream(raw_key)
         if not raw_bytes:
-            db.update_model_status(model_id, "error")
-            return {"status": "error", "error": f"Raw key {raw_key} not found in storage."}
+            error_msg = f"Raw key {raw_key} not found in storage."
+            db.update_model_status(model_id, "error", error_msg)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 0, error_msg))
+            return {"status": "error", "error": error_msg, "model_id": model_id}
 
         # Create temporary file for meshio
         fd, temp_path = tempfile.mkstemp(suffix=".vtu")
+        
+        with os.fdopen(fd, "wb") as f:
+            f.write(raw_bytes)
+        
+        # 1. Parse
+        result = run_parse_job(model_id, temp_path, filename, publish=publish)
+
+        if result.status == JobStatus.ERROR:
+            _safe_log("error", "Parse failed", model_id=model_id, error=result.error_message)
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", result.error_message)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, result.error_message or "Parsing failed"))
+            return {"status": "error", "error": result.error_message, "model_id": model_id}
+
+        # 2. Normalize
+        publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 80, "Normalizing data..."))
         try:
-            with open(fd, "wb") as f:
-                f.write(raw_bytes)
-            
-            # Execute the core parse logic
-            result = run_parse_job(model_id, temp_path, filename)
+            normalized_model = normalize(result.parse_result)
+        except Exception as e:
+            error_msg = f"Normalization failed: {e}"
+            _safe_log("error", "Normalization failed", model_id=model_id, error=error_msg)
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", error_msg)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+            return {"status": "error", "error": error_msg, "model_id": model_id}
 
-            if result.status == JobStatus.ERROR:
-                db.update_model_status(model_id, "error")
-            else:
-                db.update_model_status(model_id, "ready")
+        # 3. Validate
+        publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 85, "Validating model..."))
+        val_result = validate(normalized_model)
+        if not val_result.is_valid:
+            error_details = "; ".join(e.message for e in val_result.errors)
+            error_msg = f"Validation failed: {error_details}"
+            _safe_log("error", "Validation failed", model_id=model_id, error=error_msg)
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", error_msg)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+            return {"status": "error", "error": error_msg, "model_id": model_id}
 
-            return {"status": result.status.value, "model_id": model_id}
+        # 4. Extract Surface
+        publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 90, "Extracting surfaces..."))
+        try:
+            surface_mesh = extract_surface(normalized_model.nodes, normalized_model.elements)
+        except Exception as e:
+            error_msg = f"Surface extraction failed: {e}"
+            _safe_log("error", "Surface extraction failed", model_id=model_id, error=error_msg)
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", error_msg)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+            return {"status": "error", "error": error_msg, "model_id": model_id}
 
-        finally:
-            os.unlink(temp_path)
+        # 5. Write to Storage & Postgres 
+        publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 95, "Writing to storage..."))
+        try:
+            write_result = write_model(
+                model_id=model_id,
+                raw_filename=filename,
+                raw_file_bytes=raw_bytes,
+                validation_result=val_result,
+                surface_mesh=surface_mesh,
+                object_store=storage,
+                metadata_store=db
+            )
+        except Exception as e:
+            error_msg = f"Storage write failed: {e}"
+            _safe_log("error", "Storage write failed", model_id=model_id, error=error_msg)
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", error_msg)
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+            return {"status": "error", "error": error_msg, "model_id": model_id}
+
+        _safe_log("info", "Parse succeeded", model_id=model_id, written_keys=len(write_result.written_keys))
+        _safe_log("info", "Writing final model status", model_id=model_id, status="ready")
+        db.update_model_status(model_id, "ready")
+        publish(ProgressEvent(model_id, ProgressStage.COMPLETE, 100, "Parsing complete"))
+        return {"status": "ready", "model_id": model_id, "written_keys": len(write_result.written_keys)}
 
     except Exception as e:
+        error_msg = str(e)
         logger.error(f"Unhandled exception in process_upload: {e}\n{traceback.format_exc()}")
-        db.update_model_status(model_id, "error")
-        return {"status": "error", "error": str(e)}
+        try:
+            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
+            db.update_model_status(model_id, "error", error_msg)
+        except Exception:
+            pass
+        try:
+            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+        except Exception:
+            pass
+        return {"status": "error", "error": error_msg, "model_id": model_id}
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.warning(f"Failed to unlink temp file {temp_path}: {e}")

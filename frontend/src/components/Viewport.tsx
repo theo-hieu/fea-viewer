@@ -1,5 +1,5 @@
 /**
- * FEA Viewer — Viewport Component
+ * FEA Viewer - Viewport Component
  * ==================================
  *
  * Main 3D viewport wrapping raw Three.js SceneManager.
@@ -21,15 +21,9 @@ import { useContourEffect } from '@/hooks/useContourEffect';
 import { useDeformEffect } from '@/hooks/useDeformEffect';
 import { PickingManager } from '@/three/PickingManager';
 import { InfoPanel, type PickedEntity } from '@/components/InfoPanel';
-import { fetchJSON, fetchBinary, fetchBinaryMultipart } from '@/api/client';
+import { fetchBinary, fetchSurfacesBinary } from '@/api/client';
+import { fetchModelFields, fetchModelMetadata, fetchModelSets, fetchModelTree } from '@/api/models';
 import { decodeTypedArray } from '@/utils/arrayUtils';
-import type {
-    ModelMetadata,
-    ResultFieldDescriptor,
-    NamedSetDescriptor,
-    TreeNode,
-    ImportWarning,
-} from '@/utils/feaTypes';
 
 interface ViewportProps {
     containerRef?: React.RefObject<HTMLDivElement | null>;
@@ -46,14 +40,12 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const [webglAvailable, setWebglAvailable] = useState(true);
     const [pickedEntity, setPickedEntity] = useState<PickedEntity | null>(null);
 
-    // Wire the contour pipeline
     useContourEffect({
         contourManager: contourManagerRef.current,
         meshManager: meshManagerRef.current,
         scene: sceneManagerRef.current?.scene ?? null,
     });
 
-    // Wire the deformation pipeline
     useDeformEffect({
         deformManager: deformManagerRef.current,
         meshManager: meshManagerRef.current,
@@ -71,32 +63,33 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const setSets = useModelStore((s) => s.setSets);
     const setNodeCoords = useModelStore((s) => s.setNodeCoords);
     const setSurfaceData = useModelStore((s) => s.setSurfaceData);
+    const setActiveFieldId = useModelStore((s) => s.setActiveFieldId);
     const wireframeVisible = useViewStore((s) => s.wireframeVisible);
 
-    // Check WebGL2 availability
     useEffect(() => {
         if (!SceneManager.isWebGL2Available()) {
             setWebglAvailable(false);
         }
     }, []);
 
-    // Check memory budget
     useEffect(() => {
         const perf = performance as Performance & { memory?: { usedJSHeapSize: number } };
         if (perf.memory) {
             const usedMB = perf.memory.usedJSHeapSize / (1024 * 1024);
             if (usedMB > 2048) {
-                console.error('[Memory] Heap exceeds 2GB — refusing further loads');
+                console.error('[Memory] Heap exceeds 2GB - refusing further loads');
             } else if (usedMB > 1536) {
-                console.warn('[Memory] Heap approaching 1.5GB — performance may degrade');
+                console.warn('[Memory] Heap approaching 1.5GB - performance may degrade');
             }
         }
     }, [status]);
 
-    // Initialize Three.js scene
     useEffect(() => {
         const container = canvasContainerRef.current;
-        if (!container || !webglAvailable) return;
+        if (!container || !webglAvailable || !SceneManager.isWebGL2Available()) {
+            setWebglAvailable(false);
+            return;
+        }
 
         const sm = new SceneManager(container);
         sceneManagerRef.current = sm;
@@ -109,14 +102,22 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         );
         sm.start();
 
+        const handleResize = () => {
+            if (sm.renderer) {
+                const c = sm.renderer.domElement;
+                pickingManagerRef.current?.resize(c.width, c.height);
+            }
+        };
+        window.addEventListener('resize', handleResize);
+
         return () => {
+            window.removeEventListener('resize', handleResize);
             sm.dispose();
             pickingManagerRef.current?.dispose();
             sceneManagerRef.current = null;
         };
     }, [webglAvailable]);
 
-    // Load model data when status becomes 'ready'
     useEffect(() => {
         if (status !== 'ready' || !modelId) return;
 
@@ -127,59 +128,75 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
             if (!sm || !mm || !wm) return;
 
             try {
-                // Parallel fetch: surfaces, nodes, metadata, tree, fields, sets
-                const [surfaceRes, nodeRes, metadataRes, treeRes, fieldsRes, setsRes] =
+                console.info(`[Viewport] Status became ready for ${modelId}`);
+                console.info(`[Viewport] Renderer init start for ${modelId}`);
+                console.info(`[Viewport] Nodes fetch start for ${modelId}`);
+                console.info(`[Viewport] Surfaces fetch start for ${modelId}`);
+
+                const [nodeRes, surfaceRes, metadataRes, treeRes, fieldsRes, setsRes] =
                     await Promise.all([
-                        fetchBinaryMultipart(`/models/${modelId}/surfaces`),
                         fetchBinary(`/models/${modelId}/nodes`),
-                        fetchJSON<{ metadata: ModelMetadata; warnings: ImportWarning[] }>(
-                            `/models/${modelId}/metadata`,
-                        ),
-                        fetchJSON<TreeNode>(`/models/${modelId}/tree`),
-                        fetchJSON<ResultFieldDescriptor[]>(`/models/${modelId}/fields`),
-                        fetchJSON<NamedSetDescriptor[]>(`/models/${modelId}/sets`),
+                        fetchSurfacesBinary(`/models/${modelId}/surfaces`),
+                        fetchModelMetadata(modelId),
+                        fetchModelTree(modelId),
+                        fetchModelFields(modelId),
+                        fetchModelSets(modelId),
                     ]);
 
-                // Decode binary data
-                const surfaceIndices = decodeTypedArray(surfaceRes['indices']!, 'int32') as Int32Array;
-                const surfaceNormals = decodeTypedArray(surfaceRes['normals']!, 'float32') as Float32Array;
-                const surfaceElementMap = decodeTypedArray(surfaceRes['map']!, 'int32') as Int32Array;
+                console.info('[Viewport] Surfaces headers', {
+                    modelId,
+                    dtype: surfaceRes.headers.dtype,
+                    byteOrder: surfaceRes.headers.byteOrder,
+                    shape: surfaceRes.headers.shape,
+                    offsets: surfaceRes.headers.offsets,
+                });
+                console.info('[Viewport] Parsed surface sections', {
+                    modelId,
+                    indicesLength: surfaceRes.surfaceIndices.length,
+                    normalsLength: surfaceRes.surfaceNormals.length,
+                    mapLength: surfaceRes.surfaceElementMap.length,
+                });
+                console.info('[Viewport] Nodes fetch result', { modelId, byteLength: nodeRes.buffer.byteLength });
 
+                const surfaceIndices = surfaceRes.surfaceIndices;
+                const surfaceNormals = surfaceRes.surfaceNormals;
+                const surfaceElementMap = surfaceRes.surfaceElementMap;
                 const nodeCoords_f64 = decodeTypedArray(nodeRes.buffer, nodeRes.meta.dtype) as Float64Array;
 
-                // Store CPU-side Float64 for probing (NEVER modify)
                 setNodeCoords(nodeCoords_f64);
-                setSurfaceData(
-                    surfaceIndices,
-                    surfaceNormals,
-                    surfaceElementMap,
-                );
-
-                // Store metadata into Zustand
+                setSurfaceData(surfaceIndices, surfaceNormals, surfaceElementMap);
                 setMetadata(metadataRes.metadata);
                 setWarnings(metadataRes.warnings ?? []);
                 setTree(treeRes);
                 setFields(fieldsRes);
                 setSets(setsRes);
 
+                if (fieldsRes.length > 0 && !useModelStore.getState().activeFieldId) {
+                    setActiveFieldId(fieldsRes[0]!.id);
+                }
+
+                console.info('[Viewport] Geometry creation started', { modelId });
                 mm.buildMesh(
                     nodeCoords_f64,
                     surfaceIndices,
                     surfaceNormals,
-                    new Map(), // Single-part for now
+                    new Map(),
                     sm.scene,
                 );
 
-                // Build wireframe
                 const geom = mm.getBaseGeometry();
                 if (geom) {
                     wm.createWireframe(geom, sm.scene);
                 }
 
-                // Fit camera
                 sm.zoomToFit();
+                console.info('[Viewport] Geometry creation succeeded', { modelId });
+                console.info('[Viewport] Renderer init result', {
+                    modelId,
+                    nodeCount: nodeCoords_f64.length / 3,
+                    triangleCount: surfaceIndices.length / 3,
+                });
 
-                // Add unit warnings if applicable
                 if (metadataRes.metadata.unit_system.declared_system === 'unspecified') {
                     useModelStore.getState().addWarning({
                         category: 'Missing Units',
@@ -189,19 +206,16 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
                     });
                 }
             } catch (err) {
+                const reason = err instanceof Error ? err.message : 'Failed to load model';
                 console.error('[Viewport] Failed to load model:', err);
                 useModelStore.getState().setStatus('error');
-                useModelStore.getState().setErrorMessage(
-                    err instanceof Error ? err.message : 'Failed to load model',
-                );
+                useModelStore.getState().setErrorMessage(`Surface/bootstrap failed: ${reason}`);
             }
         };
 
         void loadModel();
-    }, [status, modelId, setMetadata, setWarnings, setTree, setFields,
-        setSets, setNodeCoords, setSurfaceData]);
+    }, [modelId, setActiveFieldId, setFields, setMetadata, setNodeCoords, setSets, setSurfaceData, setTree, setWarnings, status]);
 
-    // Sync wireframe visibility
     useEffect(() => {
         wireframeManagerRef.current?.setVisible(wireframeVisible);
     }, [wireframeVisible]);
@@ -218,7 +232,6 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         );
     }
 
-    // Canvas click handler for GPU picking
     const pickMode = useViewStore((s) => s.pickMode);
     const deformMode = useViewStore((s) => s.deformMode);
     const deformScale = useViewStore((s) => s.deformScale);
@@ -227,14 +240,12 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
     const pickSceneBuiltRef = useRef<{ mode: string; gen: number }>({ mode: '', gen: 0 });
     const geomGenRef = useRef(0);
 
-    // Track geometry generation for picking scene rebuild
     useEffect(() => {
         if (status === 'ready' && surfaceElementMap) {
             geomGenRef.current += 1;
         }
     }, [status, surfaceElementMap]);
 
-    // Rebuild picking scene when mode or geometry changes
     useEffect(() => {
         const pm = pickingManagerRef.current;
         const mm = meshManagerRef.current;
@@ -252,26 +263,11 @@ export const Viewport: React.FC<ViewportProps> = ({ containerRef: _containerRef 
         pickSceneBuiltRef.current = key;
     }, [pickMode, status, surfaceElementMap, nodeCoords_f64]);
 
-    // Sync deformation scale to picking meshes
     useEffect(() => {
         const pm = pickingManagerRef.current;
         if (!pm) return;
         pm.setDeformScale(deformMode === 'undeformed' ? 0.0 : deformScale);
     }, [deformMode, deformScale]);
-
-    // Sync picking render target size
-    useEffect(() => {
-        const pm = pickingManagerRef.current;
-        const sm = sceneManagerRef.current;
-        if (!pm || !sm) return;
-        const handleResize = () => {
-            const c = sm.renderer.domElement;
-            pm.resize(c.width, c.height);
-        };
-        handleResize();
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, [webglAvailable]);
 
     const onCanvasClick = useCallback(
         (e: React.MouseEvent<HTMLDivElement>) => {
