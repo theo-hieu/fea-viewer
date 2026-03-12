@@ -1,0 +1,12 @@
+.pytest-tmp/
+.pytest_tmp/
+.pytest_cache/
+backend/.pytest_tmp/
+backend/.pytest_cache/
+backend/pytest-cache/
+backend/pytest-cache-files-*/
+backend/pytest-probe/
+backend/pytest-tmp/
+backend/__pycache__/
+backend/tests/__pycache__/
+frontend/node_modules/

@@ -358,13 +358,34 @@ import os
 import tempfile
 import traceback
 from app.tasks.celery_app import celery_app
-from app.models.db import PostgresMetadataStore
-from app.storage.s3_client import S3Client
 
 from app.parsing.normalizer import normalize
 from app.parsing.validator import validate
 from app.parsing.surface_extractor import extract_surface
 from app.parsing.storage_writer import write_model
+
+
+def PostgresMetadataStore():
+    """
+    Lazily construct the concrete metadata store.
+
+    Tests that only exercise parsing/task orchestration should be able to import
+    this module without requiring the Postgres DBAPI driver to be installed.
+    """
+    from app.models.db import PostgresMetadataStore as _PostgresMetadataStore
+
+    return _PostgresMetadataStore()
+
+
+def S3Client():
+    """
+    Lazily construct the concrete object store.
+
+    This keeps boto3/storage startup side effects out of import-time code paths.
+    """
+    from app.storage.s3_client import S3Client as _S3Client
+
+    return _S3Client()
 
 @celery_app.task(name="app.tasks.parse_task.process_upload")
 def process_upload(model_id: str, raw_key: str, filename: str) -> dict:

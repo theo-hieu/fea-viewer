@@ -55,9 +55,12 @@ If running **without** Docker:
 3.  Install dependencies:
     ```bash
     cd backend
-    pip install -r requirements.txt
-    pip install -e .
+    pip install -e .[dev]
     ```
+
+For parity with the Docker image, `pip install -r requirements.txt` is also valid.
+The editable install now includes the backend runtime dependencies needed to
+import task modules and run the pytest suite locally.
 
 ### 2. Frontend (Vite + React + Three.js)
 1.  Navigate to the frontend directory: `cd frontend`
@@ -73,6 +76,16 @@ If running **without** Docker:
 ```bash
 docker compose exec api pytest
 ```
+
+Local backend test runs:
+```bash
+cd backend
+pytest
+```
+
+Backend tests force temp artifacts into a dedicated writable temp root so
+Windows temp-directory permission issues do not block the parser and task
+suites.
 
 ### Frontend (Vitest & Playwright)
 ```bash
