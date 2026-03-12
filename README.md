@@ -87,6 +87,11 @@ Backend tests force temp artifacts into a dedicated writable temp root so
 Windows temp-directory permission issues do not block the parser and task
 suites.
 
+Alternative: run tests in the dedicated backend test image:
+```bash
+docker build --target test -t fea-viewer-backend:test ./backend
+docker run --rm -v "$PWD/backend:/app" -w /app fea-viewer-backend:test pytest tests -q
+```
 ### Frontend (Vitest & Playwright)
 ```bash
 cd frontend

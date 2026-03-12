@@ -39,6 +39,40 @@ describe('API binary parsing', () => {
         expect(new Float64Array(res.buffer).length).toBe(6);
     });
 
+    it('throws on malformed nodes x-array-shape', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            mockBinaryResponse({
+                buffer: new Float64Array([0, 1, 2]).buffer,
+                headers: {
+                    'X-Array-Dtype': 'float64',
+                    'X-Array-Shape': '{not-json}',
+                    'X-Array-ByteOrder': 'little',
+                },
+            }),
+        ));
+
+        await expect(fetchBinary('/models/m1/nodes')).rejects.toThrow(
+            'Malformed X-Array-Shape header',
+        );
+    });
+
+    it('throws on invalid nodes payload size', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            mockBinaryResponse({
+                buffer: new Float64Array([0, 1, 2]).buffer,
+                headers: {
+                    'X-Array-Dtype': 'float64',
+                    'X-Array-Shape': '[2,3]',
+                    'X-Array-ByteOrder': 'little',
+                },
+            }),
+        ));
+
+        await expect(fetchBinary('/models/m1/nodes')).rejects.toThrow(
+            'Binary payload size mismatch',
+        );
+    });
+
     it('parses packed mixed /surfaces payload', async () => {
         const indices = new Int32Array([0, 1, 2]);
         const normals = new Float32Array([0, 0, 1, 0, 1, 0, 1, 0, 0]);

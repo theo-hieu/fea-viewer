@@ -9,3 +9,4 @@ Requires-Dist: vtk>=9.3; extra == "vtk"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Requires-Dist: httpx>=0.28.0; extra == "dev"

@@ -26,6 +26,8 @@ export interface ModelState {
     // Model identity & status
     modelId: string | null;
     status: ModelStatus;
+    bootstrapStatus: 'idle' | 'loading' | 'loaded' | 'error';
+    bootstrapStep: string | null;
     uploadProgress: number;
     parseProgress: number;
     errorMessage: string | null;
@@ -63,6 +65,10 @@ export interface ModelState {
     setParsing: () => void;
     setReady: () => void;
     setError: (msg: string) => void;
+    setBootstrapLoading: (step: string) => void;
+    setBootstrapLoaded: () => void;
+    setBootstrapIdle: () => void;
+    setBootstrapError: (step: string, msg: string) => void;
     resetModel: () => void;
 
     // --- Hydration Actions ---
@@ -108,6 +114,8 @@ export interface ModelState {
 const initialState = {
     modelId: null as string | null,
     status: 'idle' as ModelStatus,
+    bootstrapStatus: 'idle' as const,
+    bootstrapStep: null as string | null,
     uploadProgress: 0,
     parseProgress: 0,
     errorMessage: null as string | null,
@@ -141,7 +149,17 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }),
     setParsing: () => set({ status: 'parsing' }),
     setReady: () => set({ status: 'ready' }),
-    setError: (msg) => set({ status: 'error', errorMessage: msg }),
+    setError: (msg) => set({ status: 'error', errorMessage: msg, bootstrapStatus: 'error' }),
+    setBootstrapLoading: (step) => set({ bootstrapStatus: 'loading', bootstrapStep: step }),
+    setBootstrapLoaded: () => set({ bootstrapStatus: 'loaded', bootstrapStep: null }),
+    setBootstrapIdle: () => set({ bootstrapStatus: 'idle', bootstrapStep: null }),
+    setBootstrapError: (step, msg) =>
+        set({
+            status: 'error',
+            errorMessage: msg,
+            bootstrapStatus: 'error',
+            bootstrapStep: step,
+        }),
     resetModel: () => set(initialState),
 
     // --- Hydration Actions (semantic aliases) ---

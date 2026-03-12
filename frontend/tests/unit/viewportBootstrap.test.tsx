@@ -168,6 +168,7 @@ describe('Viewport bootstrap with surfaces payload', () => {
         });
 
         expect(useModelStore.getState().status).toBe('ready');
+        expect(useModelStore.getState().bootstrapStatus).toBe('loaded');
     });
 
     it('sets explicit error state when surfaces parsing fails', async () => {
@@ -179,6 +180,62 @@ describe('Viewport bootstrap with surfaces payload', () => {
             expect(useModelStore.getState().status).toBe('error');
         });
 
-        expect(useModelStore.getState().errorMessage).toContain('Surface/bootstrap failed: bad surfaces header');
+        expect(useModelStore.getState().errorMessage).toContain('Bootstrap failed during fetching geometry: bad surfaces header');
+    });
+
+    it('does not hang in loading state when geometry validation fails', async () => {
+        (spies.fetchSurfacesBinary as Mock).mockResolvedValue({
+            surfaceIndices: new Int32Array([0, 1, 9]),
+            surfaceNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+            surfaceElementMap: new Int32Array([0]),
+            headers: {
+                dtype: 'mixed',
+                shape: { indices: [3], normals: [9], map: [1] },
+                byteOrder: 'little',
+                offsets: { indices: [0, 12], normals: [12, 48], map: [48, 52] },
+            },
+        });
+        (spies.buildMesh as Mock).mockImplementationOnce(() => {
+            throw new Error('Surface indices exceed vertex count (max=9, vertexCount=3)');
+        });
+
+        render(React.createElement(Viewport));
+
+        await waitFor(() => {
+            expect(useModelStore.getState().bootstrapStatus).toBe('error');
+        });
+
+        expect(useModelStore.getState().status).toBe('error');
+        expect(useModelStore.getState().errorMessage).toContain('Surface indices exceed vertex count');
+    });
+
+    it('does not let sparse tree/panel failures block mesh rendering', async () => {
+        (spies.fetchSurfacesBinary as Mock).mockResolvedValue({
+            surfaceIndices: new Int32Array([0, 1, 2]),
+            surfaceNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+            surfaceElementMap: new Int32Array([0]),
+            headers: {
+                dtype: 'mixed',
+                shape: { indices: [3], normals: [9], map: [1] },
+                byteOrder: 'little',
+                offsets: { indices: [0, 12], normals: [12, 48], map: [48, 52] },
+            },
+        });
+        (spies.fetchModelTree as Mock).mockRejectedValue(new Error('tree exploded'));
+
+        render(React.createElement(Viewport));
+
+        await waitFor(() => {
+            expect(spies.buildMesh).toHaveBeenCalled();
+        });
+
+        expect(useModelStore.getState().status).toBe('ready');
+        expect(useModelStore.getState().bootstrapStatus).toBe('loaded');
+        expect(useModelStore.getState().tree).toEqual({
+            id: 'assembly-root',
+            name: 'Assembly',
+            type: 'assembly',
+            children: [],
+        });
     });
 });

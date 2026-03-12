@@ -209,6 +209,11 @@ def test_full_successful_write():
     # Check Warnings
     assert "Parser warning" in m_row["warnings"]
     assert "Validation warning" in m_row["warnings"]
+    assert m_row["tree"]["assembly"]["name"] == "Assy"
+    assert m_row["tree"]["assembly"]["instance_ids"] == ["i1"]
+    assert m_row["tree"]["assembly"]["instances"][0]["part_id"] == "p1"
+    assert m_row["tree"]["assembly"]["parts"][0]["element_count"] == 1
+    assert {s["name"] for s in m_row["tree"]["assembly"]["sets"]} == {"Base", "Surface"}
     
     # Check DB Fields
     f_rows = db.fields["model-123"]

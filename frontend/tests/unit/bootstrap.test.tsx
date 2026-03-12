@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
 import App from '@/App';
 import { useModelStore } from '@/store/modelStore';
@@ -39,7 +39,7 @@ describe('URL Bootstrap Flow', () => {
 
         render(React.createElement(App, null));
 
-        expect(screen.getByText('Loading model...')).toBeDefined();
+        expect(screen.getByText('Checking model status...')).toBeDefined();
         expect(screen.queryByText('Upload a VTK/VTU file to begin')).toBeNull();
 
         await waitFor(() => {
@@ -72,7 +72,7 @@ describe('URL Bootstrap Flow', () => {
 
         render(React.createElement(App, null));
 
-        expect(screen.getByText('Loading model...')).toBeDefined();
+        expect(screen.getByText('Checking model status...')).toBeDefined();
 
         await act(async () => {
             await vi.advanceTimersByTimeAsync(1000);
@@ -80,6 +80,60 @@ describe('URL Bootstrap Flow', () => {
 
         expect(screen.getByTestId('viewport-mock')).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(useModelStore.getState().status).toBe('ready');
+    });
+
+    it('uploads a file, keeps polling through uploading/parsing, and bootstraps automatically', async () => {
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ model_id: 'uploaded-model-id' }),
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ status: 'uploading', warnings_count: 0, error_message: null }),
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ status: 'parsing', warnings_count: 0, error_message: null }),
+            })
+            .mockResolvedValueOnce({
+                ok: true,
+                json: async () => ({ status: 'ready', warnings_count: 1, error_message: null }),
+            });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const { container } = render(React.createElement(App, null));
+        const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+        expect(input).not.toBeNull();
+
+        await act(async () => {
+            const file = new File(['mesh'], 'sample.vtu', { type: 'application/octet-stream' });
+            fireEvent.change(input!, { target: { files: [file] } });
+            await Promise.resolve();
+        });
+
+        expect(useModelStore.getState().modelId).toBe('uploaded-model-id');
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(3000);
+        });
+
+        await act(async () => {
+            await Promise.resolve();
+        });
+
+        expect(screen.getByTestId('viewport-mock')).toBeDefined();
+        expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/v1/models/upload', expect.objectContaining({
+            method: 'POST',
+            body: expect.any(FormData),
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('/api/v1/models/upload', expect.anything());
+        expect(fetchMock).toHaveBeenCalledWith('/api/v1/models/uploaded-model-id/status', {
+            headers: { Accept: 'application/json' },
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(4);
         expect(useModelStore.getState().status).toBe('ready');
     });
 

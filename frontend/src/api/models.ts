@@ -34,7 +34,63 @@ type BackendTreeResponse = TreeNode | {
         id?: string;
         name?: string;
         children?: BackendTreeResponse[];
+        instances?: Array<{
+            id?: string;
+            name?: string;
+            children?: BackendTreeResponse[];
+            parts?: Array<{
+                id?: string;
+                name?: string;
+                children?: BackendTreeResponse[];
+                sets?: Array<{
+                    id?: string;
+                    name?: string;
+                    set_type?: 'node' | 'element';
+                }>;
+            }>;
+            sets?: Array<{
+                id?: string;
+                name?: string;
+                set_type?: 'node' | 'element';
+            }>;
+        }>;
+        parts?: Array<{
+            id?: string;
+            name?: string;
+            children?: BackendTreeResponse[];
+            sets?: Array<{
+                id?: string;
+                name?: string;
+                set_type?: 'node' | 'element';
+            }>;
+        }>;
+        sets?: Array<{
+            id?: string;
+            name?: string;
+            set_type?: 'node' | 'element';
+        }>;
     };
+};
+
+type BackendSetNode = {
+    id?: string;
+    name?: string;
+    set_type?: 'node' | 'element';
+};
+
+type BackendPartNode = {
+    id?: string;
+    name?: string;
+    children?: BackendTreeResponse[];
+    sets?: BackendSetNode[];
+};
+
+type BackendInstanceNode = {
+    id?: string;
+    name?: string;
+    children?: BackendTreeResponse[];
+    parts?: BackendPartNode[];
+    sets?: BackendSetNode[];
 };
 
 interface MonitorHandlers {
@@ -82,16 +138,21 @@ export function monitorModelStatus(modelId: string, handlers: MonitorHandlers): 
             window.clearTimeout(timeoutId);
         }
         if (wsUnsubscribe) {
-            console.info(`[ModelBootstrap] Polling stop for ${modelId}`);
             wsUnsubscribe();
             wsUnsubscribe = null;
         }
     };
 
-    const scheduleNextPoll = () => {
+    const stopPolling = (reason: string) => {
+        console.info('[ModelBootstrap] Polling stopped', { modelId, reason });
+        cleanup();
+    };
+
+    const scheduleNextPoll = (status: string) => {
         timeoutId = window.setTimeout(() => {
             void poll();
         }, POLL_INTERVAL_MS);
+        console.info('[ModelBootstrap] Polling scheduled', { modelId, status, delayMs: POLL_INTERVAL_MS });
     };
 
     const ensureProgressSubscription = () => {
@@ -113,24 +174,25 @@ export function monitorModelStatus(modelId: string, handlers: MonitorHandlers): 
 
         try {
             const status = await fetchModelStatus(modelId);
+            console.info('[ModelBootstrap] Status response', { modelId, status: status.status, response: status });
             handlers.onStatus(status);
 
-            if (status.status === 'parsing') {
+            if (status.status === 'uploading' || status.status === 'parsing') {
                 ensureProgressSubscription();
 
                 if (Date.now() - startedAt >= PARSING_TIMEOUT_MS) {
-                    cleanup();
+                    stopPolling('timeout');
                     handlers.onTimeout();
                     return;
                 }
 
-                scheduleNextPoll();
+                scheduleNextPoll(status.status);
                 return;
             }
 
-            cleanup();
+            stopPolling(`terminal:${status.status}`);
         } catch (error) {
-            cleanup();
+            stopPolling('request-error');
             handlers.onError(error instanceof Error ? error : new Error('Unknown bootstrap error'));
         }
     };
@@ -156,7 +218,11 @@ export async function fetchModelTree(modelId: string): Promise<TreeNode> {
     console.info(`[Viewport] Tree fetch start for ${modelId}`);
     const response = await fetchJSON<BackendTreeResponse>(`/models/${modelId}/tree`);
     const tree = normalizeTree(response);
-    console.info('[Viewport] Tree fetch result', { modelId, root: tree.name });
+    console.info('[Viewport] Tree parse result', {
+        modelId,
+        root: tree.name,
+        childCount: tree.children?.length ?? 0,
+    });
     return tree;
 }
 
@@ -238,10 +304,60 @@ function normalizeTree(response: BackendTreeResponse): TreeNode {
     }
 
     const assembly = response.assembly ?? {};
+    const assemblyChildren = [
+        ...(assembly.children?.map(normalizeTree) ?? []),
+        ...(assembly.instances?.map((instance, index) => normalizeInstance(instance, index)) ?? []),
+        ...(assembly.parts?.map((part, index) => normalizePart(part, index)) ?? []),
+        ...(assembly.sets?.map((setNode, index) => normalizeSet(setNode, index)) ?? []),
+    ];
+
     return {
         id: assembly.id ?? 'assembly-root',
         name: assembly.name ?? 'Assembly',
         type: 'assembly',
-        children: assembly.children?.map(normalizeTree) ?? [],
+        children: assemblyChildren,
+    };
+}
+
+function normalizeInstance(
+    instance: BackendInstanceNode,
+    index: number,
+): TreeNode {
+    return {
+        id: instance.id ?? `instance-${index}`,
+        name: instance.name ?? `Instance ${index + 1}`,
+        type: 'instance',
+        children: [
+            ...(instance.children?.map(normalizeTree) ?? []),
+            ...(instance.parts?.map((part: BackendPartNode, partIndex: number) => normalizePart(part, partIndex)) ?? []),
+            ...(instance.sets?.map((setNode: BackendSetNode, setIndex: number) => normalizeSet(setNode, setIndex)) ?? []),
+        ],
+    };
+}
+
+function normalizePart(
+    part: BackendPartNode,
+    index: number,
+): TreeNode {
+    return {
+        id: part.id ?? `part-${index}`,
+        name: part.name ?? `Part ${index + 1}`,
+        type: 'part',
+        children: [
+            ...(part.children?.map(normalizeTree) ?? []),
+            ...(part.sets?.map((setNode: BackendSetNode, setIndex: number) => normalizeSet(setNode, setIndex)) ?? []),
+        ],
+    };
+}
+
+function normalizeSet(
+    setNode: BackendSetNode,
+    index: number,
+): TreeNode {
+    return {
+        id: setNode.id ?? `set-${index}`,
+        name: setNode.name ?? `Set ${index + 1}`,
+        type: setNode.set_type === 'element' ? 'element_set' : 'node_set',
+        children: [],
     };
 }

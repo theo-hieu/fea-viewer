@@ -5,10 +5,9 @@
  * Drag-drop or file picker, progress bar via WebSocket and status polling.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useModelStore } from '@/store/modelStore';
 import { uploadFile } from '@/api/client';
-import { monitorModelStatus } from '@/api/models';
 
 export const UploadPanel: React.FC = () => {
     const status = useModelStore((s) => s.status);
@@ -22,46 +21,9 @@ export const UploadPanel: React.FC = () => {
     const setParseProgress = useModelStore((s) => s.setParseProgress);
     const setErrorMessage = useModelStore((s) => s.setErrorMessage);
     const resetModel = useModelStore((s) => s.resetModel);
+    const setBootstrapIdle = useModelStore((s) => s.setBootstrapIdle);
     const [isDragOver, setIsDragOver] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
-    const stopMonitoringRef = useRef<(() => void) | null>(null);
-
-    useEffect(() => {
-        return () => {
-            stopMonitoringRef.current?.();
-        };
-    }, []);
-
-    const startMonitoring = useCallback((nextModelId: string) => {
-        stopMonitoringRef.current?.();
-        stopMonitoringRef.current = monitorModelStatus(nextModelId, {
-            onStatus: (response) => {
-                if (response.status === 'ready') {
-                    setStatus('ready');
-                    return;
-                }
-
-                if (response.status === 'error') {
-                    setStatus('error');
-                    setErrorMessage(response.error_message ?? 'Parse failed');
-                    return;
-                }
-
-                setStatus('parsing');
-            },
-            onProgress: (message) => {
-                setParseProgress(message.progress * 100);
-            },
-            onError: (error) => {
-                setStatus('error');
-                setErrorMessage(error.message || 'Failed to monitor model status');
-            },
-            onTimeout: () => {
-                setStatus('error');
-                setErrorMessage('Model parsing timed out after 60 seconds');
-            },
-        });
-    }, [setErrorMessage, setParseProgress, setStatus]);
 
     const handleFile = useCallback(async (file: File) => {
         resetModel();
@@ -69,19 +31,20 @@ export const UploadPanel: React.FC = () => {
         setUploadProgress(0);
         setParseProgress(0);
         setErrorMessage(null);
+        setBootstrapIdle();
 
         try {
             const { model_id } = await uploadFile(file);
-            console.info(`[UploadPanel] Uploaded file, monitoring model ${model_id}`);
+            console.info('[UploadPanel] Upload returned modelId', { modelId: model_id, fileName: file.name });
             setModelId(model_id);
+            window.history.replaceState({}, '', `/?modelId=${encodeURIComponent(model_id)}`);
             setStatus('parsing');
             setUploadProgress(100);
-            startMonitoring(model_id);
         } catch (err) {
             setStatus('error');
             setErrorMessage(err instanceof Error ? err.message : 'Upload failed');
         }
-    }, [resetModel, setErrorMessage, setModelId, setParseProgress, setStatus, setUploadProgress, startMonitoring]);
+    }, [resetModel, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress, setStatus, setUploadProgress]);
 
     const onDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();

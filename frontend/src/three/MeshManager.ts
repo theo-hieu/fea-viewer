@@ -10,7 +10,7 @@
  */
 
 import * as THREE from 'three';
-import { float64ToFloat32 } from '@/utils/arrayUtils';
+import { logSurfaceGeometryStats, prepareSurfaceGeometry } from '@/three/surfaceGeometry';
 
 export interface PartMeshGroup {
     partId: string;
@@ -20,6 +20,11 @@ export interface PartMeshGroup {
 export class MeshManager {
     private meshGroups: PartMeshGroup[] = [];
     private baseGeometry: THREE.BufferGeometry | null = null;
+    private readonly debugMaterialMode: boolean;
+
+    constructor(options?: { debugMaterialMode?: boolean }) {
+        this.debugMaterialMode = options?.debugMaterialMode ?? false;
+    }
 
     /**
      * Build the complete surface mesh from binary data.
@@ -34,22 +39,22 @@ export class MeshManager {
         nodeCoords_f64: Float64Array,
         surfaceIndices: Int32Array,
         surfaceNormals: Float32Array,
+        surfaceElementMap: Int32Array | null,
         partTriangleRanges: Map<string, [number, number]>,
         scene: THREE.Scene,
     ): void {
         this.clear(scene);
-
-        // Downcast coordinates from Float64 → Float32 for GPU
-        const positions_f32 = float64ToFloat32(nodeCoords_f64);
-
-        // Build shared geometry
-        this.baseGeometry = new THREE.BufferGeometry();
-        this.baseGeometry.setAttribute('position', new THREE.BufferAttribute(positions_f32, 3));
-        this.baseGeometry.setAttribute('normal', new THREE.BufferAttribute(surfaceNormals, 3));
-        this.baseGeometry.setIndex(new THREE.BufferAttribute(surfaceIndices, 1));
+        const prepared = prepareSurfaceGeometry({
+            nodeCoords_f64,
+            surfaceIndices,
+            surfaceNormals,
+            surfaceElementMap,
+        });
+        logSurfaceGeometryStats(prepared.stats, 'MeshManager');
+        this.baseGeometry = prepared.geometry;
 
         // Add displacement attribute (zeroed initially)
-        const displacement = new Float32Array(positions_f32.length);
+        const displacement = new Float32Array(prepared.positions.length);
         this.baseGeometry.setAttribute('displacement', new THREE.BufferAttribute(displacement, 3));
 
         // Add scalar value attribute (zeroed initially)
@@ -58,14 +63,10 @@ export class MeshManager {
 
         if (partTriangleRanges.size === 0) {
             // Single part — one mesh for all
-            const material = new THREE.MeshPhongMaterial({
-                color: 0x58a6ff,
-                side: THREE.DoubleSide,
-                flatShading: false,
-                vertexColors: false,
-            });
+            const material = this.createSurfaceMaterial();
             const mesh = new THREE.Mesh(this.baseGeometry, material);
             mesh.name = 'default';
+            mesh.frustumCulled = !this.debugMaterialMode;
             scene.add(mesh);
             this.meshGroups.push({ partId: 'default', mesh });
         } else {
@@ -78,15 +79,10 @@ export class MeshManager {
                 const partGeom = this.baseGeometry.clone();
                 partGeom.setDrawRange(startIdx, count);
 
-                const material = new THREE.MeshPhongMaterial({
-                    color: 0x58a6ff,
-                    side: THREE.DoubleSide,
-                    flatShading: false,
-                    vertexColors: false,
-                });
-
+                const material = this.createSurfaceMaterial();
                 const mesh = new THREE.Mesh(partGeom, material);
                 mesh.name = partId;
+                mesh.frustumCulled = !this.debugMaterialMode;
                 scene.add(mesh);
                 this.meshGroups.push({ partId, mesh });
             }
@@ -148,5 +144,20 @@ export class MeshManager {
         }
         this.meshGroups = [];
         this.baseGeometry = null;
+    }
+
+    private createSurfaceMaterial(): THREE.Material {
+        if (this.debugMaterialMode) {
+            return new THREE.MeshNormalMaterial({
+                side: THREE.DoubleSide,
+            });
+        }
+
+        return new THREE.MeshPhongMaterial({
+            color: 0x58a6ff,
+            side: THREE.DoubleSide,
+            flatShading: false,
+            vertexColors: false,
+        });
     }
 }

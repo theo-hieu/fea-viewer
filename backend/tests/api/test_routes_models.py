@@ -55,7 +55,8 @@ class MockMetadataStore:
             self.models[model_id]["status"] = status
             
     def get_model_tree(self, model_id: str) -> dict[str, Any]:
-        return {"assembly": {}}
+        model = self.models.get(model_id, {})
+        return model.get("tree", {"assembly": {}})
         
     def get_fields(self, model_id: str) -> list[dict[str, Any]]:
         return self.fields.get(model_id, [])
@@ -227,6 +228,51 @@ def test_metadata_preserves_unspecified_units(clean_app):
     us = resp.json()["unit_system"]
     assert us["length"] == "unspecified"
     assert us["force"] == "unspecified"
+
+
+def test_tree_endpoint_returns_populated_hierarchy(clean_app):
+    db = app.dependency_overrides[get_metadata_store]()
+    db.models["m1"] = {
+        "status": "ready",
+        "tree": {
+            "assembly": {
+                "name": "Assembly",
+                "instance_ids": ["instance-0"],
+                "instances": [
+                    {
+                        "id": "instance-0",
+                        "name": "Instance 1",
+                        "part_id": "part-0",
+                        "part_name": "Part 1",
+                        "transform": [1.0, 0.0, 0.0, 0.0] * 4,
+                    }
+                ],
+                "parts": [
+                    {
+                        "id": "part-0",
+                        "name": "Part 1",
+                        "element_count": 5,
+                    }
+                ],
+                "sets": [
+                    {
+                        "name": "Support",
+                        "entity_type": "node",
+                        "member_count": 12,
+                    }
+                ],
+            }
+        },
+    }
+
+    resp = client.get("/api/v1/models/m1/tree")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assembly"]["name"] == "Assembly"
+    assert data["assembly"]["instance_ids"] == ["instance-0"]
+    assert data["assembly"]["instances"][0]["part_id"] == "part-0"
+    assert data["assembly"]["parts"][0]["element_count"] == 5
+    assert data["assembly"]["sets"][0]["entity_type"] == "node"
 
 
 # ===================================================================

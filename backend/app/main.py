@@ -1,7 +1,9 @@
 import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.api.v1.routes_models import router as models_router
+from app.config import settings
 
 app = FastAPI(
     title="FEA Viewer API",
@@ -26,7 +28,6 @@ def health_check():
 @app.get("/health/ready")
 def readiness_check():
     import redis
-    from app.config import settings
     from sqlalchemy import text
     from app.models.db import engine
     from app.storage.s3_client import S3Client

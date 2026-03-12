@@ -42,6 +42,16 @@ from app.parsing.vtk_parser import parse_vtk
 logger = logging.getLogger(__name__)
 
 
+def _write_model_status(
+    db: PostgresMetadataStore,
+    model_id: str,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    _safe_log("info", "Writing final model status", model_id=model_id, status=status)
+    db.update_model_status(model_id, status, error_message)
+
+
 def _safe_log(level: str, message: str, **extra: Any) -> None:
     """Best-effort structured logging that never breaks task execution."""
     try:
@@ -397,7 +407,6 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
     temp_path = None
     try:
         # Mark as parsing
-        _safe_log("info", "Writing final model status", model_id=model_id, status="parsing")
         db.update_model_status(model_id, "parsing")
 
         # Download from S3 to temp disk
@@ -419,8 +428,7 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
 
         if result.status == JobStatus.ERROR:
             _safe_log("error", "Parse failed", model_id=model_id, error=result.error_message)
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", result.error_message)
+            _write_model_status(db, model_id, "error", result.error_message)
             publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, result.error_message or "Parsing failed"))
             return {"status": "error", "error": result.error_message, "model_id": model_id}
 
@@ -431,8 +439,7 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Normalization failed: {e}"
             _safe_log("error", "Normalization failed", model_id=model_id, error=error_msg)
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg)
             publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
             return {"status": "error", "error": error_msg, "model_id": model_id}
 
@@ -443,8 +450,7 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
             error_details = "; ".join(e.message for e in val_result.errors)
             error_msg = f"Validation failed: {error_details}"
             _safe_log("error", "Validation failed", model_id=model_id, error=error_msg)
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg)
             publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
             return {"status": "error", "error": error_msg, "model_id": model_id}
 
@@ -455,8 +461,7 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Surface extraction failed: {e}"
             _safe_log("error", "Surface extraction failed", model_id=model_id, error=error_msg)
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg)
             publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
             return {"status": "error", "error": error_msg, "model_id": model_id}
 
@@ -475,14 +480,12 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Storage write failed: {e}"
             _safe_log("error", "Storage write failed", model_id=model_id, error=error_msg)
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg)
             publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
             return {"status": "error", "error": error_msg, "model_id": model_id}
 
         _safe_log("info", "Parse succeeded", model_id=model_id, written_keys=len(write_result.written_keys))
-        _safe_log("info", "Writing final model status", model_id=model_id, status="ready")
-        db.update_model_status(model_id, "ready")
+        _write_model_status(db, model_id, "ready")
         publish(ProgressEvent(model_id, ProgressStage.COMPLETE, 100, "Parsing complete"))
         return {"status": "ready", "model_id": model_id, "written_keys": len(write_result.written_keys)}
 
@@ -490,8 +493,7 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         error_msg = str(e)
         logger.error(f"Unhandled exception in process_upload: {e}\n{traceback.format_exc()}")
         try:
-            _safe_log("info", "Writing final model status", model_id=model_id, status="error")
-            db.update_model_status(model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg)
         except Exception:
             pass
         try:

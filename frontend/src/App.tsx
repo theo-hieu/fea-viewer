@@ -5,10 +5,10 @@
  * Layout: toolbar (top) + sidebar (left) + viewport (center/right).
  * Panels overlay the viewport: info panel, color legend, warning banner.
  *
- * Per 04 §3.1: App.tsx with layout: toolbar + sidebar + viewport + panels.
+ * Per 04 3.1: App.tsx with layout: toolbar + sidebar + viewport + panels.
  */
 
-import React, { useLayoutEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useModelStore } from '@/store/modelStore';
 import { UploadPanel } from '@/components/UploadPanel';
 import { ModelTree } from '@/components/ModelTree';
@@ -24,9 +24,10 @@ import { WarningBanner } from '@/components/WarningBanner';
 import { monitorModelStatus } from '@/api/models';
 
 const App: React.FC = () => {
-    const requestedModelIdRef = useRef<string | null>(new URLSearchParams(window.location.search).get('modelId'));
-    const requestedModelId = requestedModelIdRef.current;
+    const requestedModelId = new URLSearchParams(window.location.search).get('modelId');
+    const modelId = useModelStore((s) => s.modelId);
     const status = useModelStore((s) => s.status);
+    const bootstrapStatus = useModelStore((s) => s.bootstrapStatus);
     const warnings = useModelStore((s) => s.warnings);
     const tree = useModelStore((s) => s.tree);
     const metadata = useModelStore((s) => s.metadata);
@@ -38,21 +39,32 @@ const App: React.FC = () => {
     const setErrorMessage = useModelStore((s) => s.setErrorMessage);
     const setParseProgress = useModelStore((s) => s.setParseProgress);
     const resetModel = useModelStore((s) => s.resetModel);
+    const setBootstrapIdle = useModelStore((s) => s.setBootstrapIdle);
 
-    useLayoutEffect(() => {
-        if (!requestedModelId) return;
+    useEffect(() => {
+        if (!requestedModelId || modelId === requestedModelId) return;
 
         console.info(`[App] Detected modelId from URL: ${requestedModelId}`);
         resetModel();
         setModelId(requestedModelId);
-        setStatus('parsing');
         setParseProgress(0);
         setErrorMessage(null);
+        setBootstrapIdle();
+    }, [modelId, requestedModelId, resetModel, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress]);
 
-        return monitorModelStatus(requestedModelId, {
+    useEffect(() => {
+        if (!modelId) return;
+        if (status === 'ready' || status === 'error') return;
+
+        console.info('[App] Starting status lifecycle monitor', { modelId, status });
+
+        return monitorModelStatus(modelId, {
             onStatus: (response) => {
+                console.info('[App] Status response payload', { modelId, response });
                 if (response.status === 'ready') {
+                    console.info(`[App] Transition to ready for ${modelId}`);
                     setStatus('ready');
+                    setParseProgress(100);
                     return;
                 }
 
@@ -62,7 +74,7 @@ const App: React.FC = () => {
                     return;
                 }
 
-                setStatus('parsing');
+                setStatus(response.status);
             },
             onProgress: (message) => {
                 setParseProgress(message.progress * 100);
@@ -70,22 +82,24 @@ const App: React.FC = () => {
             onError: (error) => {
                 console.error('[App] Bootstrap error', error);
                 setStatus('error');
-                setErrorMessage(error.message || 'Failed to bootstrap model');
+                setErrorMessage(`Status polling failed: ${error.message || 'Failed to bootstrap model'}`);
             },
             onTimeout: () => {
                 const timeoutMessage = 'Model parsing timed out after 60 seconds';
-                console.error('[App] Bootstrap timeout', { modelId: requestedModelId });
+                console.error('[App] Bootstrap timeout', { modelId });
                 setStatus('error');
                 setErrorMessage(timeoutMessage);
             },
         });
-    }, [requestedModelId, resetModel, setErrorMessage, setModelId, setParseProgress, setStatus]);
+    }, [modelId, setErrorMessage, setParseProgress, setStatus, status]);
 
     const isReady = status === 'ready';
     const hasModelData = metadata !== null || tree !== null || fields.length > 0;
     const showDataPanels = isReady || (status === 'error' && hasModelData);
-    const isBootstrappingFromUrl = !!requestedModelId && (status === 'idle' || status === 'parsing');
-    const showUploadPanel = !requestedModelId && status !== 'ready';
+    const isCheckingStatus = !!modelId && status === 'idle';
+    const isParsingFromBackend = status === 'parsing' || status === 'uploading';
+    const isBootstrappingReadyModel = status === 'ready' && bootstrapStatus !== 'loaded';
+    const showUploadPanel = !modelId && status !== 'ready';
 
     return (
         <div className="app-layout">
@@ -130,20 +144,29 @@ const App: React.FC = () => {
             </div>
 
             <div className="viewport" ref={viewportRef}>
-                {status === 'idle' && !isBootstrappingFromUrl ? (
+                {status === 'idle' && !modelId ? (
                     <div className="no-data-message">
                         Upload a VTK/VTU file to begin
                     </div>
                 ) : status === 'uploading' ? (
                     <div className="no-data-message">Uploading...</div>
-                ) : status === 'parsing' || isBootstrappingFromUrl ? (
-                    <div className="no-data-message">Loading model...</div>
+                ) : isCheckingStatus ? (
+                    <div className="no-data-message">Checking model status...</div>
+                ) : isParsingFromBackend ? (
+                    <div className="no-data-message">
+                        {modelId ? `Parsing ${modelId}...` : 'Parsing...'}
+                    </div>
                 ) : status === 'error' ? (
                     <div className="no-data-message" style={{ color: 'var(--accent-danger)' }}>
                         Error loading model. Check sidebar for details.
                     </div>
                 ) : (
-                    <Viewport containerRef={viewportRef} />
+                    <>
+                        <Viewport containerRef={viewportRef} />
+                        {isBootstrappingReadyModel && (
+                            <div className="no-data-message">Loading model...</div>
+                        )}
+                    </>
                 )}
 
                 {showDataPanels && activeFieldId && <ColorLegend />}
@@ -155,4 +178,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-

@@ -51,18 +51,23 @@ export async function fetchBinary(
         throw new ApiError(res.status, body);
     }
 
-    const dtype = res.headers.get('X-Array-Dtype') ?? 'float64';
-    const shapeStr = res.headers.get('X-Array-Shape') ?? '[]';
-    const byteOrder = res.headers.get('X-Array-ByteOrder') ?? 'little';
+    const buffer = await res.arrayBuffer();
+    const dtype = res.headers.get('X-Array-Dtype');
+    const shapeStr = res.headers.get('X-Array-Shape');
+    const byteOrder = res.headers.get('X-Array-ByteOrder');
 
-    let shape: number[];
-    try {
-        shape = JSON.parse(shapeStr) as number[];
-    } catch {
-        shape = [];
+    if (!dtype) {
+        throw new Error(`Missing X-Array-Dtype header for ${path}`);
+    }
+    if (!shapeStr) {
+        throw new Error(`Missing X-Array-Shape header for ${path}`);
+    }
+    if (!byteOrder) {
+        throw new Error(`Missing X-Array-ByteOrder header for ${path}`);
     }
 
-    const buffer = await res.arrayBuffer();
+    const shape = parseJsonHeader<number[]>(shapeStr, 'X-Array-Shape');
+    validateSimpleBinaryMeta(path, dtype, shape, byteOrder, buffer.byteLength);
     return { buffer, meta: { dtype, shape, byteOrder } };
 }
 
@@ -202,10 +207,11 @@ function parseTypedSection(
         throw new Error(`Misaligned byte range for section "${sectionName}"`);
     }
 
+    const sectionBuffer = fullBuffer.slice(start, end);
     if (dtype === 'int32') {
-        return new Int32Array(fullBuffer, start, byteLength / 4);
+        return new Int32Array(sectionBuffer);
     }
-    return new Float32Array(fullBuffer, start, byteLength / 4);
+    return new Float32Array(sectionBuffer);
 }
 
 function validateShapeLength(shape: number[], actualLength: number, sectionName: string): void {
@@ -216,6 +222,45 @@ function validateShapeLength(shape: number[], actualLength: number, sectionName:
         throw new Error(
             `Shape length mismatch for section "${sectionName}": expected ${shape[0]}, got ${actualLength}`,
         );
+    }
+}
+
+function validateSimpleBinaryMeta(
+    path: string,
+    dtype: string,
+    shape: number[],
+    byteOrder: string,
+    byteLength: number,
+): void {
+    if (byteOrder !== 'little') {
+        throw new Error(`Unsupported byte order "${byteOrder}" for ${path}`);
+    }
+    if (!Array.isArray(shape) || shape.length === 0 || shape.some((dim) => !Number.isInteger(dim) || dim < 0)) {
+        throw new Error(`Malformed X-Array-Shape header for ${path}`);
+    }
+
+    const bytesPerElement = getBytesPerElement(dtype, path);
+    const expectedElements = shape.reduce((product, dim) => product * dim, 1);
+    const expectedBytes = expectedElements * bytesPerElement;
+    if (expectedBytes !== byteLength) {
+        throw new Error(
+            `Binary payload size mismatch for ${path}: expected ${expectedBytes} bytes, got ${byteLength}`,
+        );
+    }
+}
+
+function getBytesPerElement(dtype: string, path: string): number {
+    switch (dtype) {
+        case 'float64':
+            return Float64Array.BYTES_PER_ELEMENT;
+        case 'float32':
+            return Float32Array.BYTES_PER_ELEMENT;
+        case 'int32':
+            return Int32Array.BYTES_PER_ELEMENT;
+        case 'uint8':
+            return Uint8Array.BYTES_PER_ELEMENT;
+        default:
+            throw new Error(`Unsupported dtype "${dtype}" for ${path}`);
     }
 }
 
@@ -264,4 +309,3 @@ export class ApiError extends Error {
         this.name = 'ApiError';
     }
 }
-

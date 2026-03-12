@@ -28,7 +28,7 @@ describe('Direct link integration flow', () => {
         render(React.createElement(App, null));
 
         expect(screen.queryByText('Upload a VTK/VTU file to begin')).toBeNull();
-        expect(screen.getByText('Loading model...')).toBeDefined();
+        expect(screen.getByText('Checking model status...')).toBeDefined();
 
         await waitFor(() => {
             expect(screen.getByTestId('viewport-mock')).toBeDefined();

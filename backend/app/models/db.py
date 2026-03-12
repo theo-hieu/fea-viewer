@@ -158,7 +158,12 @@ class PostgresMetadataStore(ApiMetadataStore):
                 session.commit()
 
     def get_model_tree(self, model_id: str) -> dict[str, Any]:
-        return {"assembly": {}} # MVP returns a dummy tree
+        with self._get_session() as session:
+            row = session.get(ModelRow, model_id)
+            if not row:
+                return {"assembly": {}}
+            props = row.properties or {}
+            return props.get("tree", {"assembly": {}})
 
     def get_fields(self, model_id: str) -> list[dict[str, Any]]:
         with self._get_session() as session:
@@ -204,6 +209,10 @@ class PostgresMetadataStore(ApiMetadataStore):
             props = row.properties.copy() if row.properties else {}
             props["unit_system"] = model_row.get("unit_system", props.get("unit_system"))
             props["warnings"] = model_row.get("warnings", props.get("warnings", []))
+            if "metadata" in model_row:
+                props["metadata"] = model_row["metadata"]
+            if "tree" in model_row:
+                props["tree"] = model_row["tree"]
             if "error_message" in model_row:
                 props["error_message"] = model_row["error_message"]
             row.properties = props

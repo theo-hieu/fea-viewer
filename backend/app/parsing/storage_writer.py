@@ -226,6 +226,7 @@ def write_model(
         all_warnings.append(vw.message)
         
     us = model.unit_system
+    tree = _build_model_tree(model)
         
     model_row = {
         "id": model_id,
@@ -241,6 +242,7 @@ def write_model(
             "file_format": model.metadata.file_format,
             "coordinate_system": model.metadata.coordinate_system,
         },
+        "tree": tree,
         "unit_system": {
             "length": us.length,
             "force": us.force,
@@ -322,3 +324,44 @@ def _generate_set_id(model_id: str, named_set: NamedSet) -> str:
     seed = f"{model_id}_{named_set.name}_{named_set.set_type}"
     digest = hashlib.md5(seed.encode("utf-8")).hexdigest()[:8]
     return f"set_{digest}"
+
+
+def _build_model_tree(model: Any) -> dict[str, Any]:
+    """Serialize normalized hierarchy into the API tree shape."""
+    part_lookup = {part.id: part for part in model.parts}
+    parts_payload: list[dict[str, Any]] = []
+    for part in model.parts:
+        parts_payload.append({
+            "id": part.id,
+            "name": part.name,
+            "element_count": int(len(part.element_indices)),
+        })
+
+    instances_payload: list[dict[str, Any]] = []
+    for instance in model.instances:
+        part = part_lookup.get(instance.part_id)
+        instances_payload.append({
+            "id": instance.id,
+            "name": instance.name,
+            "part_id": instance.part_id,
+            "part_name": part.name if part else instance.part_id,
+            "transform": instance.transform.astype(np.float64).tolist(),
+        })
+
+    sets_payload: list[dict[str, Any]] = []
+    for named_set in model.node_sets + model.element_sets:
+        sets_payload.append({
+            "name": named_set.name,
+            "entity_type": named_set.set_type,
+            "member_count": int(len(named_set.member_indices)),
+        })
+
+    return {
+        "assembly": {
+            "name": model.assembly.name,
+            "instance_ids": list(model.assembly.instance_ids),
+            "instances": instances_payload,
+            "parts": parts_payload,
+            "sets": sets_payload,
+        }
+    }
