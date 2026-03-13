@@ -17,8 +17,13 @@ The easiest way to run the entire stack (Frontend, Backend, Database, Cache, Sto
     ```
 3.  **Access the application:**
     - **Frontend:** [http://localhost](http://localhost)
-    - **API Health:** [http://localhost/api/v1/health](http://localhost/api/v1/health) (Proxied via Nginx)
+    - **API Health (liveness):** [http://localhost/api/v1/health](http://localhost/api/v1/health)
+    - **API Health (readiness):** [http://localhost/api/v1/health/ready](http://localhost/api/v1/health/ready)
     - **MinIO Console (Storage):** [http://localhost:9001](http://localhost:9001) (User: `minioadmin`, Pass: `minioadmin`)
+
+The Docker Compose nginx service listens on `80` only. HTTPS is not exposed in
+this local stack. For ingress/container probes, nginx also proxies `/health`
+and `/health/ready` to the canonical API health endpoints above.
 
 ---
 
@@ -104,6 +109,17 @@ cd frontend
 npm test -- --run tests/unit/modelMetadataApi.test.ts
 ```
 
+Recommended health contract regression checks:
+```bash
+cd backend
+pytest tests/api/test_health_routes.py -q
+```
+
+```bash
+# from the repository root
+pytest tests/integration/test_health_contract.py -q
+```
+
 Recommended quality checks for the crash-safe parser path:
 ```bash
 cd backend
@@ -136,8 +152,8 @@ npm run build
 Backend:
 ```bash
 cd backend
-python -m ruff check app/api/v1/routes_models.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
-python -m mypy app/api/v1/routes_models.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m ruff check app/api/v1/routes_models.py app/main.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_health_routes.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m mypy app/api/v1/routes_models.py app/main.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_health_routes.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
 pytest tests -q
 ```
 
