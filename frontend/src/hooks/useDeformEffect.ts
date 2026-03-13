@@ -153,25 +153,25 @@ export function useDeformEffect(refs: DeformEffectRefs): void {
         };
     }, [deformFieldId, activeTimestep, modelId, status, fields, nodeCoords_f64, refs]);
 
-    // --- Effect 2: Update u_deform_scale uniform on mode/scale change ---
-    // This ONLY updates the uniform — no geometry re-upload
+    // --- Effect 2: Update deformation uniforms on all visible material paths ---
     useEffect(() => {
         const { deformManager, meshManager, contourManager, wireframeManager, scene } = refs;
         if (!deformManager || !meshManager) return;
 
         const geom = meshManager.getBaseGeometry();
-        if (!geom || !deformFieldId) return;
+        if (!geom) return;
 
-        // Determine effective scale based on mode
-        let effectiveScale: number;
-        switch (deformMode) {
-            case 'undeformed':
-                effectiveScale = 0.0;
-                break;
-            case 'deformed':
-            case 'overlay':
-                effectiveScale = deformScale;
-                break;
+        let effectiveScale = 0.0;
+        if (deformFieldId) {
+            switch (deformMode) {
+                case 'undeformed':
+                    effectiveScale = 0.0;
+                    break;
+                case 'deformed':
+                case 'overlay':
+                    effectiveScale = deformScale;
+                    break;
+            }
         }
 
         // Float32 overflow check: clamp if scale * max_displacement > FLOAT32_MAX_SAFE
@@ -191,17 +191,15 @@ export function useDeformEffect(refs: DeformEffectRefs): void {
             }
         }
 
-        // Update uniform on contour material (if active) and Phong material
+        meshManager.setDeformScale(effectiveScale);
         const contourMat = contourManager?.getMaterial();
-        if (contourMat) {
-            contourManager!.setDeformScale(effectiveScale);
+        if (contourManager && contourMat) {
+            contourManager.setDeformScale(effectiveScale);
         }
-        // Also set on the DeformationManager's tracked material (for Phong fallback)
-        // The Phong material doesn't have the uniform, but we track the contour material
 
         // Overlay mode: show undeformed wireframe on top
         if (wireframeManager && scene) {
-            if (deformMode === 'overlay' && effectiveScale > 0) {
+            if (deformFieldId && deformMode === 'overlay' && effectiveScale > 0) {
                 // Create overlay wireframe from base geometry (undeformed)
                 wireframeManager.createOverlayWireframe(geom, scene);
             } else {

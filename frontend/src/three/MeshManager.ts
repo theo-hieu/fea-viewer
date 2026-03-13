@@ -3,10 +3,10 @@
  * ==========================
  *
  * Per 04 §3.2: Build BufferGeometry from binary surfaces,
- * per-part mesh groups, indexed draw.
+ * per-part mesh groups, triangle-isolated draw.
  *
- * Float32 positions for GPU, Int32 indices for indexed drawing.
- * Per-part grouping enables show/hide/isolate without GPU re-upload.
+ * Float32 positions for GPU. Surface vertices are de-indexed so elemental
+ * contouring and element picking never share topology.
  */
 
 import * as THREE from 'three';
@@ -15,6 +15,50 @@ import { logSurfaceGeometryStats, prepareSurfaceGeometry } from '@/three/surface
 export interface PartMeshGroup {
     partId: string;
     mesh: THREE.Mesh;
+}
+
+type DeformUniform = { value: number };
+type MaterialShader = {
+    uniforms: Record<string, unknown>;
+    vertexShader: string;
+};
+type DeformableMaterial = THREE.Material & {
+    userData: THREE.Material['userData'] & { deformUniform?: DeformUniform };
+    customProgramCacheKey?: () => string;
+};
+
+export function enableSurfaceMaterialDeformation<T extends THREE.Material>(material: T): T {
+    const deformable = material as unknown as DeformableMaterial;
+    const deformUniform: DeformUniform = { value: 0.0 };
+    const previousOnBeforeCompile = deformable.onBeforeCompile?.bind(deformable);
+    const previousCacheKey = deformable.customProgramCacheKey?.bind(deformable);
+
+    deformable.userData.deformUniform = deformUniform;
+    deformable.onBeforeCompile = (parameters, renderer) => {
+        previousOnBeforeCompile?.(parameters, renderer);
+        const shader = parameters as unknown as MaterialShader;
+        shader.uniforms.u_deform_scale = deformUniform;
+        shader.vertexShader = shader.vertexShader
+            .replace(
+                '#include <common>',
+                '#include <common>\nattribute vec3 displacement;\nuniform float u_deform_scale;',
+            )
+            .replace(
+                '#include <begin_vertex>',
+                'vec3 transformed = position + u_deform_scale * displacement;',
+            );
+    };
+    deformable.customProgramCacheKey = () =>
+        `${previousCacheKey ? previousCacheKey() : deformable.type}:surface-deform-v1`;
+
+    return material;
+}
+
+export function setSurfaceMaterialDeformScale(material: THREE.Material, scale: number): void {
+    const deformable = material as DeformableMaterial;
+    if (deformable.userData.deformUniform) {
+        deformable.userData.deformUniform.value = scale;
+    }
 }
 
 export class MeshManager {
@@ -58,7 +102,7 @@ export class MeshManager {
         this.baseGeometry.setAttribute('displacement', new THREE.BufferAttribute(displacement, 3));
 
         // Add scalar value attribute (zeroed initially)
-        const scalarValue = new Float32Array(nodeCoords_f64.length / 3);
+        const scalarValue = new Float32Array(this.baseGeometry.getAttribute('position').count);
         this.baseGeometry.setAttribute('scalarValue', new THREE.BufferAttribute(scalarValue, 1));
 
         if (partTriangleRanges.size === 0) {
@@ -75,7 +119,7 @@ export class MeshManager {
                 const startIdx = startTri * 3;
                 const count = (endTri - startTri) * 3;
 
-                // Create a sub-geometry sharing the same attributes but with restricted draw range
+                // Create a sub-geometry with triangle-range-restricted draw calls.
                 const partGeom = this.baseGeometry.clone();
                 partGeom.setDrawRange(startIdx, count);
 
@@ -101,6 +145,22 @@ export class MeshManager {
      */
     getBaseGeometry(): THREE.BufferGeometry | null {
         return this.baseGeometry;
+    }
+
+    /**
+     * Update deformation scale on the default surface materials.
+     */
+    setDeformScale(scale: number): void {
+        for (const group of this.meshGroups) {
+            const material = group.mesh.material;
+            if (Array.isArray(material)) {
+                for (const entry of material) {
+                    setSurfaceMaterialDeformScale(entry, scale);
+                }
+            } else {
+                setSurfaceMaterialDeformScale(material, scale);
+            }
+        }
     }
 
     /**
@@ -148,16 +208,16 @@ export class MeshManager {
 
     private createSurfaceMaterial(): THREE.Material {
         if (this.debugMaterialMode) {
-            return new THREE.MeshNormalMaterial({
+            return enableSurfaceMaterialDeformation(new THREE.MeshNormalMaterial({
                 side: THREE.DoubleSide,
-            });
+            }));
         }
 
-        return new THREE.MeshPhongMaterial({
+        return enableSurfaceMaterialDeformation(new THREE.MeshPhongMaterial({
             color: 0x58a6ff,
             side: THREE.DoubleSide,
             flatShading: false,
             vertexColors: false,
-        });
+        }));
     }
 }

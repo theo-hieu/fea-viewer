@@ -25,6 +25,7 @@ Overrides from base architecture doc:
 """
 
 from typing import Any, Protocol
+import json
 
 from fastapi import (
     APIRouter,
@@ -147,6 +148,38 @@ def _binary_response(content: bytes, dtype: str, shape: str, request_id: str) ->
 def _json_response(content: Any, request: Request, status_code: int = 200) -> JSONResponse:
     req_id = _get_request_id(request)
     return JSONResponse(status_code=status_code, content=content, headers={"X-Request-Id": req_id})
+
+
+def _field_data_shape(blob: bytes, field_meta: dict[str, Any]) -> str:
+    """
+    Return a concrete field-data shape for the binary contract.
+
+    Contract:
+      - scalar fields (components == 1) -> [entity_count]
+      - vector/tensor fields (components > 1) -> [entity_count, components]
+
+    Entity count is derived from the persisted payload byte length, so the backend
+    remains the source of truth for the binary layout.
+    """
+    components = field_meta.get("components", 1)
+    if not isinstance(components, int) or components <= 0:
+        raise HTTPException(status_code=500, detail="Field metadata has invalid component count")
+
+    bytes_per_value = 8  # float64 field payloads are persisted exactly
+    values_per_entity = components
+    value_count, remainder = divmod(len(blob), bytes_per_value)
+    if remainder != 0:
+        raise HTTPException(status_code=500, detail="Field payload byte length is not aligned to float64")
+
+    entity_count, component_remainder = divmod(value_count, values_per_entity)
+    if component_remainder != 0:
+        raise HTTPException(
+            status_code=500,
+            detail="Field payload size does not match field component metadata",
+        )
+
+    shape = [entity_count] if components == 1 else [entity_count, components]
+    return json.dumps(shape)
     
 
 # ---------------------------------------------------------------------------
@@ -420,9 +453,8 @@ async def get_field_data(
     if not blob:
         raise HTTPException(status_code=404, detail="Binary payload missing")
         
-    # Example constraint: field vectors are unrolled into a flat dimension 
-    shape_str = f"[-1, {field_meta.get('components', 1)}]"
-    
+    shape_str = _field_data_shape(blob, field_meta)
+
     return _binary_response(blob, "float64", shape_str, _get_request_id(request))
 
 

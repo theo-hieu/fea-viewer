@@ -18,8 +18,11 @@ Self-check:
 
 from __future__ import annotations
 
-import os
 import logging
+import os
+import pickle
+import subprocess
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -36,9 +39,16 @@ from app.parsing.models import (
 )
 from app.tasks.parse_task import (
     JobStatus,
+    PARSE_SUBPROCESS_EXIT_CODE,
+    PARSE_SUBPROCESS_OUTPUT_CODE,
+    PARSE_SUBPROCESS_SIGNAL_CODE,
+    PARSE_SUBPROCESS_TIMEOUT_CODE,
     ProgressEvent,
     ProgressStage,
+    ParseSubprocessResult,
+    ParseSupervisorFailure,
     run_parse_job,
+    run_parse_subprocess,
 )
 
 
@@ -111,6 +121,11 @@ def collect_events(events: list[ProgressEvent]):
     return publisher
 
 
+def write_pickled_payload(path: Path, value) -> None:
+    with path.open("wb") as handle:
+        pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 # ===================================================================
 # 1. Successful parse — progress events & status
 # ===================================================================
@@ -122,8 +137,8 @@ class TestSuccessfulParse:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             result = run_parse_job("model-001", filepath, "model.vtu")
 
@@ -141,8 +156,8 @@ class TestSuccessfulParse:
 
         events: list[ProgressEvent] = []
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             run_parse_job("m1", filepath, "model.vtu", publish=collect_events(events))
 
@@ -163,8 +178,8 @@ class TestSuccessfulParse:
 
         events: list[ProgressEvent] = []
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             run_parse_job("m1", filepath, "model.vtu", publish=collect_events(events))
 
@@ -178,8 +193,8 @@ class TestSuccessfulParse:
 
         events: list[ProgressEvent] = []
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             run_parse_job("m1", filepath, "model.vtu", publish=collect_events(events))
 
@@ -193,10 +208,10 @@ class TestSuccessfulParse:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result(
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result(
                 warnings=["Unsupported element type 'polygon' skipped."]
-            )
+            ))
 
             result = run_parse_job("m1", filepath, "model.vtu")
 
@@ -208,8 +223,8 @@ class TestSuccessfulParse:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             result = run_parse_job("m1", filepath, "model.vtu")
 
@@ -223,12 +238,39 @@ class TestSuccessfulParse:
 class TestParseFailure:
     """When parser returns ParseError."""
 
+    def test_corrupted_vtu_supervisor_exit_transitions_to_error(self):
+        filepath = "/home/lev52808/projects/fea-viewer/backend/tests/audit-artifacts/audit_broken.vtu"
+        events: list[ProgressEvent] = []
+
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(
+                failure=ParseSupervisorFailure(
+                    error_code=PARSE_SUBPROCESS_EXIT_CODE,
+                    error_message=(
+                        "Parsing failed for 'audit_broken.vtu' because the parser process exited unexpectedly."
+                    ),
+                    technical_message="exit_code=1; stderr=Couldn't read file audit_broken.vtu as vtu",
+                ),
+            )
+
+            result = run_parse_job(
+                "broken-model",
+                filepath,
+                "audit_broken.vtu",
+                publish=collect_events(events),
+            )
+
+        assert result.status == JobStatus.ERROR
+        assert result.error_code == PARSE_SUBPROCESS_EXIT_CODE
+        assert result.error_message is not None
+        assert any(event.stage == ProgressStage.ERROR for event in events)
+
     def test_status_is_error(self, tmp_path):
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_parse_error()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_parse_error())
 
             result = run_parse_job("m1", filepath, "model.vtu")
 
@@ -243,8 +285,8 @@ class TestParseFailure:
 
         events: list[ProgressEvent] = []
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_parse_error()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_parse_error())
 
             run_parse_job("m1", filepath, "model.vtu", publish=collect_events(events))
 
@@ -258,8 +300,8 @@ class TestParseFailure:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_parse_error()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_parse_error())
 
             run_parse_job("m1", filepath, "model.vtu")
 
@@ -282,6 +324,7 @@ class TestDetectionFailure:
 
         assert result.status == JobStatus.ERROR
         assert result.error_message is not None
+        assert result.error_code == "unsupported_file_format"
 
     def test_executable_rejected(self, tmp_path):
         filepath = str(tmp_path / "solver.exe")
@@ -320,6 +363,7 @@ class TestFileReadFailure:
 
         assert result.status == JobStatus.ERROR
         assert "Cannot read file" in result.error_message
+        assert result.error_code == "parse_input_unreadable"
 
 
 # ===================================================================
@@ -367,8 +411,8 @@ class TestAuditLogging:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             with caplog.at_level(logging.INFO):
                 run_parse_job("m1", filepath, "model.vtu")
@@ -381,8 +425,8 @@ class TestAuditLogging:
         filepath = str(tmp_path / "model.vtu")
         write_vtu(filepath)
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_parse_error()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_parse_error())
 
             with caplog.at_level(logging.ERROR):
                 run_parse_job("m1", filepath, "model.vtu")
@@ -406,8 +450,8 @@ class TestPublisherResilience:
         def bad_publisher(event):
             raise ConnectionError("Redis down")
 
-        with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-            mock_parse.return_value = make_success_result()
+        with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+            mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
 
             # Should not raise despite publisher failures
             result = run_parse_job("m1", filepath, "model.vtu", publish=bad_publisher)
@@ -428,8 +472,8 @@ class TestDeterminism:
 
         results = []
         for _ in range(5):
-            with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-                mock_parse.return_value = make_success_result()
+            with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+                mock_subprocess.return_value = ParseSubprocessResult(payload=make_success_result())
                 results.append(run_parse_job("m1", filepath, "model.vtu"))
 
         assert all(r.status == JobStatus.READY for r in results)
@@ -440,8 +484,85 @@ class TestDeterminism:
 
         results = []
         for _ in range(5):
-            with mock.patch("app.tasks.parse_task.parse_vtk") as mock_parse:
-                mock_parse.return_value = make_parse_error()
+            with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
+                mock_subprocess.return_value = ParseSubprocessResult(payload=make_parse_error())
                 results.append(run_parse_job("m1", filepath, "model.vtu"))
 
         assert all(r.status == JobStatus.ERROR for r in results)
+
+
+# ===================================================================
+# 9. Parse subprocess supervision
+# ===================================================================
+
+class TestParseSubprocessSupervisor:
+    def test_non_zero_exit_becomes_structured_failure(self):
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=1,
+            stdout="",
+            stderr="Couldn't read file as vtu",
+        )
+
+        with mock.patch("app.tasks.parse_task.subprocess.run", return_value=completed):
+            result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
+
+        assert result.failure is not None
+        assert result.failure.error_code == PARSE_SUBPROCESS_EXIT_CODE
+        assert "exited unexpectedly" in result.failure.error_message
+
+    def test_signal_exit_becomes_structured_failure(self):
+        completed = subprocess.CompletedProcess(
+            args=["python3"],
+            returncode=-9,
+            stdout="",
+            stderr="killed",
+        )
+
+        with mock.patch("app.tasks.parse_task.subprocess.run", return_value=completed):
+            result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
+
+        assert result.failure is not None
+        assert result.failure.error_code == PARSE_SUBPROCESS_SIGNAL_CODE
+        assert "SIGKILL" in result.failure.error_message
+
+    def test_timeout_becomes_structured_failure(self):
+        with mock.patch(
+            "app.tasks.parse_task.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["python3"], timeout=5, stderr="hung"),
+        ):
+            result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
+
+        assert result.failure is not None
+        assert result.failure.error_code == PARSE_SUBPROCESS_TIMEOUT_CODE
+        assert result.timed_out is True
+
+    def test_malformed_output_becomes_structured_failure(self):
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("--output") + 1])
+            output_path.write_text('{"kind":"success"}', encoding="utf-8")
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with mock.patch("app.tasks.parse_task.subprocess.run", side_effect=fake_run):
+            result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
+
+        assert result.failure is not None
+        assert result.failure.error_code == PARSE_SUBPROCESS_OUTPUT_CODE
+
+    def test_success_payload_is_loaded(self):
+        expected = make_success_result()
+
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("--output") + 1])
+            payload_path = Path(command[command.index("--payload") + 1])
+            write_pickled_payload(payload_path, expected)
+            output_path.write_text(
+                '{"kind":"success","payload_path":"' + str(payload_path) + '"}',
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with mock.patch("app.tasks.parse_task.subprocess.run", side_effect=fake_run):
+            result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
+
+        assert result.payload == expected

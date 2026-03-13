@@ -358,12 +358,44 @@ def test_field_data_timestep_streaming_bounds_check(clean_app):
     assert resp.status_code == 200
     assert resp.content == b"STEP0"
     assert resp.headers.get("X-Array-Dtype") == "float64"
-    assert resp.headers.get("X-Array-Shape") == "[-1, 1]"
-    
+    assert resp.headers.get("X-Array-Shape") == "[5]"
+
     # Step 2 fails out of bounds explicit error
     resp = client.get("/api/v1/models/m1/fields/f1/data?step=2")
     assert resp.status_code == 404
     assert "timestep 2" in resp.json()["detail"].lower()
+
+
+def test_field_data_vector_contract_returns_concrete_shape(clean_app):
+    db = app.dependency_overrides[get_metadata_store]()
+    storage = app.dependency_overrides[get_object_store]()
+
+    db.models["m1"] = {"status": "ready"}
+    db.fields["m1"] = [{"id": "disp", "timestep_count": 1, "components": 3}]
+
+    values = b"A" * (2 * 3 * 8)
+    storage.blobs["models/m1/fields/disp/step_0.f64"] = values
+
+    resp = client.get("/api/v1/models/m1/fields/disp/data?step=0")
+
+    assert resp.status_code == 200
+    assert resp.content == values
+    assert resp.headers.get("X-Array-Dtype") == "float64"
+    assert resp.headers.get("X-Array-Shape") == "[2, 3]"
+
+
+def test_field_data_contract_rejects_misaligned_payload(clean_app):
+    db = app.dependency_overrides[get_metadata_store]()
+    storage = app.dependency_overrides[get_object_store]()
+
+    db.models["m1"] = {"status": "ready"}
+    db.fields["m1"] = [{"id": "disp", "timestep_count": 1, "components": 3}]
+    storage.blobs["models/m1/fields/disp/step_0.f64"] = b"A" * 17
+
+    resp = client.get("/api/v1/models/m1/fields/disp/data?step=0")
+
+    assert resp.status_code == 500
+    assert "aligned to float64" in resp.json()["detail"]
 
 
 def test_set_members_binary(clean_app):

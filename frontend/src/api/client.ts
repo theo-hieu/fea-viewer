@@ -39,6 +39,10 @@ export async function fetchJSON<T>(path: string): Promise<T> {
 
 /**
  * Fetch a binary ArrayBuffer from the API with typed-array metadata headers.
+ *
+ * Contract for simple binary payloads:
+ *   - scalar arrays: [entityCount]
+ *   - multi-component arrays: [entityCount, componentCount]
  */
 export async function fetchBinary(
     path: string,

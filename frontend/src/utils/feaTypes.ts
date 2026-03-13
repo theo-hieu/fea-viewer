@@ -175,7 +175,7 @@ export interface ColorMapConfig {
 
 export interface BinaryMeta {
     dtype: string;        // "float64", "float32", "int32", "uint8"
-    shape: number[];      // e.g. [15000, 3]
+    shape: number[];      // scalar: [n], vector/tensor: [n, components]
     byteOrder: string;    // "little"
 }
 

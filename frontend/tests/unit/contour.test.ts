@@ -15,10 +15,29 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as THREE from 'three';
 import { finiteMinMax, countNaN, normalizeScalar } from '@/utils/arrayUtils';
 import { sampleLutRGB } from '@/three/colorMaps';
+import { ContourManager } from '@/three/ContourManager';
 import { useModelStore } from '@/store/modelStore';
 import { useViewStore } from '@/store/viewStore';
+
+function makeSplitSurfaceGeometry(): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(18), 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(18), 3));
+    geometry.setAttribute('displacement', new THREE.BufferAttribute(new Float32Array(18), 3));
+    geometry.setAttribute('scalarValue', new THREE.BufferAttribute(new Float32Array(6), 1));
+    geometry.setAttribute(
+        'sourceNodeIndex',
+        new THREE.BufferAttribute(new Uint32Array([0, 1, 2, 1, 2, 3]), 1),
+    );
+    geometry.setAttribute(
+        'sourceElementIndex',
+        new THREE.BufferAttribute(new Int32Array([10, 10, 10, 20, 20, 20]), 1),
+    );
+    return geometry;
+}
 
 // ---------------------------------------------------------------------------
 // NaN / Inf autorange exclusion
@@ -94,32 +113,26 @@ describe('Contour normalization — zero range', () => {
 // Nodal scalar contour application
 // ---------------------------------------------------------------------------
 describe('Contour — nodal scalar application', () => {
-    it('maps per-node Float64 values to Float32 scalar attribute', () => {
-        // Simulate a geometry with 4 nodes
-        const nNodes = 4;
-        const scalarArray = new Float32Array(nNodes);
+    it('maps per-node Float64 values onto split surface vertices', () => {
+        const geometry = makeSplitSurfaceGeometry();
+        const manager = new ContourManager();
         const values = new Float64Array([10.0, 20.0, 30.0, 40.0]);
 
-        // Simulate nodal application: each node gets its value directly
-        for (let i = 0; i < scalarArray.length; i++) {
-            scalarArray[i] = i < values.length ? values[i]! : NaN;
-        }
+        manager.applyScalarField(geometry, values, 'nodal');
 
-        expect(scalarArray[0]).toBeCloseTo(10.0, 0);
-        expect(scalarArray[1]).toBeCloseTo(20.0, 0);
-        expect(scalarArray[2]).toBeCloseTo(30.0, 0);
-        expect(scalarArray[3]).toBeCloseTo(40.0, 0);
+        const scalarArray = geometry.getAttribute('scalarValue').array as Float32Array;
+        expect(Array.from(scalarArray)).toEqual([10, 20, 30, 20, 30, 40]);
     });
 
     it('fills excess vertices with NaN', () => {
-        const scalarArray = new Float32Array(5);
-        const values = new Float64Array([1.0, 2.0, 3.0]);
+        const geometry = makeSplitSurfaceGeometry();
+        const manager = new ContourManager();
+        const values = new Float64Array([1.0, 2.0]);
 
-        for (let i = 0; i < scalarArray.length; i++) {
-            scalarArray[i] = i < values.length ? values[i]! : NaN;
-        }
+        manager.applyScalarField(geometry, values, 'nodal');
+        const scalarArray = geometry.getAttribute('scalarValue').array as Float32Array;
 
-        expect(scalarArray[3]).toBeNaN();
+        expect(scalarArray[2]).toBeNaN();
         expect(scalarArray[4]).toBeNaN();
     });
 });
@@ -128,36 +141,29 @@ describe('Contour — nodal scalar application', () => {
 // Elemental scalar contour application using surface_element_map
 // ---------------------------------------------------------------------------
 describe('Contour — elemental scalar application via surface_element_map', () => {
-    it('assigns per-element value to all 3 vertices of each triangle', () => {
-        // 2 triangles, 4 nodes
-        const surfaceIndices = new Int32Array([0, 1, 2, 1, 2, 3]);
-        const surfaceElementMap = new Int32Array([10, 20]); // tri 0 → elem 10, tri 1 → elem 20
-        const nNodes = 4;
-        const scalarArray = new Float32Array(nNodes);
-        scalarArray.fill(NaN);
-
-        // Element-level values: index by element ID
+    it('keeps adjacent shared-topology elements isolated after triangle splitting', () => {
+        const geometry = makeSplitSurfaceGeometry();
+        const manager = new ContourManager();
         const values = new Float64Array(100);
         values[10] = 100.0;
         values[20] = 200.0;
 
-        const nTris = surfaceIndices.length / 3;
-        for (let tri = 0; tri < nTris; tri++) {
-            const elemIdx = surfaceElementMap[tri]!;
-            const val = elemIdx < values.length ? values[elemIdx]! : NaN;
-            for (let v = 0; v < 3; v++) {
-                const nodeIdx = surfaceIndices[tri * 3 + v]!;
-                scalarArray[nodeIdx] = val;
-            }
-        }
+        manager.createContourMaterial(useViewStore.getState().colorMapConfig);
+        manager.applyScalarField(geometry, values, 'elemental');
 
-        // Node 0 belongs only to tri 0 → elem 10 → 100.0
-        expect(scalarArray[0]).toBeCloseTo(100.0, 0);
-        // Nodes 1 and 2 belong to both tris — last write wins (tri 1 → 200.0)
-        expect(scalarArray[1]).toBeCloseTo(200.0, 0);
-        expect(scalarArray[2]).toBeCloseTo(200.0, 0);
-        // Node 3 belongs to tri 1 → elem 20 → 200.0
-        expect(scalarArray[3]).toBeCloseTo(200.0, 0);
+        const scalarArray = geometry.getAttribute('scalarValue').array as Float32Array;
+        expect(Array.from(scalarArray)).toEqual([100, 100, 100, 200, 200, 200]);
+        expect(manager.getMaterial()!.uniforms['u_use_flat_shading']!.value).toBe(true);
+    });
+
+    it('restores smooth interpolation semantics for nodal fields explicitly', () => {
+        const geometry = makeSplitSurfaceGeometry();
+        const manager = new ContourManager();
+
+        manager.createContourMaterial(useViewStore.getState().colorMapConfig);
+        manager.applyScalarField(geometry, new Float64Array([1, 2, 3, 4]), 'nodal');
+
+        expect(manager.getMaterial()!.uniforms['u_use_flat_shading']!.value).toBe(false);
     });
 });
 

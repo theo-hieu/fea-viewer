@@ -10,7 +10,22 @@
  */
 
 import * as THREE from 'three';
-import { float64ToFloat32 } from '@/utils/arrayUtils';
+
+export function expandNodalDisplacementToSurfaceVertices(
+    displacement_f64: Float64Array,
+    sourceNodeIndices: ArrayLike<number>,
+): Float32Array {
+    const expanded = new Float32Array(sourceNodeIndices.length * 3);
+    for (let i = 0; i < sourceNodeIndices.length; i++) {
+        const sourceNodeIndex = sourceNodeIndices[i]!;
+        const sourceOffset = sourceNodeIndex * 3;
+        const targetOffset = i * 3;
+        expanded[targetOffset] = displacement_f64[sourceOffset] ?? 0;
+        expanded[targetOffset + 1] = displacement_f64[sourceOffset + 1] ?? 0;
+        expanded[targetOffset + 2] = displacement_f64[sourceOffset + 2] ?? 0;
+    }
+    return expanded;
+}
 
 export class DeformationManager {
     private currentMaterial: THREE.ShaderMaterial | null = null;
@@ -26,7 +41,15 @@ export class DeformationManager {
         geometry: THREE.BufferGeometry,
         displacement_f64: Float64Array,
     ): void {
-        const displacement_f32 = float64ToFloat32(displacement_f64);
+        const sourceNodeIndexAttr = geometry.getAttribute('sourceNodeIndex') as THREE.BufferAttribute | undefined;
+        if (!sourceNodeIndexAttr) {
+            throw new Error('Surface geometry is missing sourceNodeIndex for deformation mapping');
+        }
+
+        const displacement_f32 = expandNodalDisplacementToSurfaceVertices(
+            displacement_f64,
+            sourceNodeIndexAttr.array as ArrayLike<number>,
+        );
         const attr = geometry.getAttribute('displacement') as THREE.BufferAttribute;
 
         if (attr && attr.array.length === displacement_f32.length) {

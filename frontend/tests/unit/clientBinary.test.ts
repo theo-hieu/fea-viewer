@@ -73,6 +73,60 @@ describe('API binary parsing', () => {
         );
     });
 
+    it('parses scalar field payload with concrete 1d shape', async () => {
+        const scalarField = new Float64Array([10, 20, 30, 40]);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            mockBinaryResponse({
+                buffer: scalarField.buffer,
+                headers: {
+                    'X-Array-Dtype': 'float64',
+                    'X-Array-Shape': '[4]',
+                    'X-Array-ByteOrder': 'little',
+                },
+            }),
+        ));
+
+        const res = await fetchBinary('/models/m1/fields/stress/data?step=0');
+        expect(res.meta.shape).toEqual([4]);
+        expect(Array.from(new Float64Array(res.buffer))).toEqual([10, 20, 30, 40]);
+    });
+
+    it('parses vector field payload with concrete 2d shape', async () => {
+        const displacement = new Float64Array([0, 1, 2, 3, 4, 5]);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            mockBinaryResponse({
+                buffer: displacement.buffer,
+                headers: {
+                    'X-Array-Dtype': 'float64',
+                    'X-Array-Shape': '[2,3]',
+                    'X-Array-ByteOrder': 'little',
+                },
+            }),
+        ));
+
+        const res = await fetchBinary('/models/m1/fields/displacement/data?step=0');
+        expect(res.meta.shape).toEqual([2, 3]);
+        expect(new Float64Array(res.buffer).length).toBe(6);
+    });
+
+    it('rejects legacy negative-dimension field shape headers', async () => {
+        const displacement = new Float64Array([0, 1, 2, 3, 4, 5]);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+            mockBinaryResponse({
+                buffer: displacement.buffer,
+                headers: {
+                    'X-Array-Dtype': 'float64',
+                    'X-Array-Shape': '[-1,3]',
+                    'X-Array-ByteOrder': 'little',
+                },
+            }),
+        ));
+
+        await expect(fetchBinary('/models/m1/fields/displacement/data?step=0')).rejects.toThrow(
+            'Malformed X-Array-Shape header',
+        );
+    });
+
     it('parses packed mixed /surfaces payload', async () => {
         const indices = new Int32Array([0, 1, 2]);
         const normals = new Float32Array([0, 0, 1, 0, 1, 0, 1, 0, 0]);

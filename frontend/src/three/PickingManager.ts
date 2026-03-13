@@ -16,6 +16,30 @@ export interface PickResult {
     id: number;
 }
 
+export function buildElementPickingColors(sourceElementIndices: ArrayLike<number>): Float32Array {
+    const colors = new Float32Array(sourceElementIndices.length * 3);
+    for (let i = 0; i < sourceElementIndices.length; i++) {
+        const sourceElementIndex = sourceElementIndices[i]!;
+        const [r, g, b] = encodeId(sourceElementIndex + 1);
+        colors[i * 3] = r;
+        colors[i * 3 + 1] = g;
+        colors[i * 3 + 2] = b;
+    }
+    return colors;
+}
+
+export function buildNodePickingColors(sourceNodeIndices: ArrayLike<number>): Float32Array {
+    const colors = new Float32Array(sourceNodeIndices.length * 3);
+    for (let i = 0; i < sourceNodeIndices.length; i++) {
+        const sourceNodeIndex = sourceNodeIndices[i]!;
+        const [r, g, b] = encodeId(sourceNodeIndex + 1);
+        colors[i * 3] = r;
+        colors[i * 3 + 1] = g;
+        colors[i * 3 + 2] = b;
+    }
+    return colors;
+}
+
 export class PickingManager {
     private pickingTarget: THREE.WebGLRenderTarget;
     private pickingScene: THREE.Scene;
@@ -43,43 +67,22 @@ export class PickingManager {
      */
     buildPickingScene(
         geometry: THREE.BufferGeometry,
-        surfaceElementMap: Int32Array,
+        _surfaceElementMap: Int32Array,
         _nNodes: number,
         mode: 'node' | 'element',
     ): void {
         this.clearPickingScene();
 
-        const indexAttr = geometry.getIndex();
-        if (!indexAttr) return;
-
-        const indices = indexAttr.array as Uint32Array | Int32Array;
-        const nTris = indices.length / 3;
-
-        // Build per-vertex color attribute for ID encoding
         const nVertices = geometry.getAttribute('position').count;
-        const colors = new Float32Array(nVertices * 3);
+        if (nVertices === 0) return;
 
-        if (mode === 'element') {
-            // Element-pick: each triangle gets its element ID from surfaceElementMap
-            for (let tri = 0; tri < nTris; tri++) {
-                const elemId = surfaceElementMap[tri] ?? 0;
-                const [r, g, b] = encodeId(elemId + 1); // +1 so 0 means "no pick"
-                for (let v = 0; v < 3; v++) {
-                    const vertIdx = indices[tri * 3 + v]!;
-                    colors[vertIdx * 3] = r;
-                    colors[vertIdx * 3 + 1] = g;
-                    colors[vertIdx * 3 + 2] = b;
-                }
-            }
-        } else {
-            // Node-pick: each vertex gets its own node ID
-            for (let i = 0; i < nVertices; i++) {
-                const [r, g, b] = encodeId(i + 1); // +1 so 0 means "no pick"
-                colors[i * 3] = r;
-                colors[i * 3 + 1] = g;
-                colors[i * 3 + 2] = b;
-            }
-        }
+        const sourceNodeIndexAttr = geometry.getAttribute('sourceNodeIndex') as THREE.BufferAttribute | undefined;
+        const sourceElementIndexAttr = geometry.getAttribute('sourceElementIndex') as THREE.BufferAttribute | undefined;
+        if (!sourceNodeIndexAttr) return;
+
+        const colors = mode === 'element' && sourceElementIndexAttr
+            ? buildElementPickingColors(sourceElementIndexAttr.array as ArrayLike<number>)
+            : buildNodePickingColors(sourceNodeIndexAttr.array as ArrayLike<number>);
 
         const pickGeom = geometry.clone();
         pickGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));

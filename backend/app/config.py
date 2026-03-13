@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     # Redis/Celery
     REDIS_URL: str = "redis://redis:6379/0"
+    PARSE_SUBPROCESS_TIMEOUT_SECONDS: int = 300
 
     # S3 / MinIO Configuration
     S3_ENDPOINT: str = "http://minio:9000"

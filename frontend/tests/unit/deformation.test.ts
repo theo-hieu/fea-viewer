@@ -16,9 +16,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import * as THREE from 'three';
 import { float64ToFloat32 } from '@/utils/arrayUtils';
 import { useModelStore } from '@/store/modelStore';
 import { useViewStore } from '@/store/viewStore';
+import { expandNodalDisplacementToSurfaceVertices } from '@/three/DeformationManager';
+import { MeshManager } from '@/three/MeshManager';
 import type { ResultFieldDescriptor, FieldProvenance } from '@/utils/feaTypes';
 
 // Helper to create a field descriptor
@@ -96,6 +99,27 @@ describe('Deformation — displacement array length', () => {
         const wrongDisp = new Float64Array(nNodes * 2); // wrong
         expect(wrongDisp.length).not.toBe(expectedLen);
     });
+
+    it('expands nodal displacement onto split surface vertices', () => {
+        const expanded = expandNodalDisplacementToSurfaceVertices(
+            new Float64Array([
+                1, 2, 3,
+                4, 5, 6,
+                7, 8, 9,
+                10, 11, 12,
+            ]),
+            new Uint32Array([0, 1, 2, 1, 2, 3]),
+        );
+
+        expect(Array.from(expanded)).toEqual([
+            1, 2, 3,
+            4, 5, 6,
+            7, 8, 9,
+            4, 5, 6,
+            7, 8, 9,
+            10, 11, 12,
+        ]);
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -168,6 +192,49 @@ describe('Deformation — scale and mode behavior', () => {
         expect(useViewStore.getState().deformScale).toBe(0);
         useViewStore.getState().setDeformScale(10000);
         expect(useViewStore.getState().deformScale).toBe(10000);
+    });
+
+    it('default surface material carries deformation uniform without contour material', () => {
+        const scene = new THREE.Scene();
+        const meshManager = new MeshManager();
+        meshManager.buildMesh(
+            new Float64Array([
+                0, 0, 0,
+                1, 0, 0,
+                1, 1, 0,
+                0, 1, 0,
+            ]),
+            new Int32Array([0, 1, 2, 0, 2, 3]),
+            new Float32Array([
+                0, 0, 1,
+                0, 0, 1,
+                0, 0, 1,
+                0, 0, 1,
+            ]),
+            new Int32Array([0, 1]),
+            new Map(),
+            scene,
+        );
+
+        const geom = meshManager.getBaseGeometry();
+        expect(geom?.getIndex()).toBeNull();
+
+        meshManager.setDeformScale(2.5);
+        const material = meshManager.getMeshGroups()[0]!.mesh.material as THREE.MeshPhongMaterial;
+        expect((material.userData.deformUniform as { value: number }).value).toBe(2.5);
+
+        const shader: {
+            uniforms: Record<string, unknown>;
+            vertexShader: string;
+        } = {
+            uniforms: {},
+            vertexShader: '#include <common>\n#include <begin_vertex>',
+        };
+        material.onBeforeCompile(shader as never, {} as THREE.WebGLRenderer);
+
+        expect((shader.uniforms.u_deform_scale as { value: number }).value).toBe(2.5);
+        expect(shader.vertexShader).toContain('attribute vec3 displacement;');
+        expect(shader.vertexShader).toContain('position + u_deform_scale * displacement');
     });
 });
 

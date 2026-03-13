@@ -19,6 +19,30 @@ import type { PartMeshGroup } from './MeshManager';
 import contourVert from './shaders/contour.vert.glsl?raw';
 import contourFrag from './shaders/contour.frag.glsl?raw';
 
+export function mapNodalValuesToSurfaceVertices(
+    values: Float64Array,
+    sourceNodeIndices: ArrayLike<number>,
+    target: Float32Array,
+): void {
+    for (let i = 0; i < target.length; i++) {
+        const sourceNodeIndex = sourceNodeIndices[i]!;
+        target[i] = sourceNodeIndex < values.length ? values[sourceNodeIndex]! : NaN;
+    }
+}
+
+export function mapElementalValuesToSurfaceVertices(
+    values: Float64Array,
+    sourceElementIndices: ArrayLike<number>,
+    target: Float32Array,
+): void {
+    for (let i = 0; i < target.length; i++) {
+        const sourceElementIndex = sourceElementIndices[i]!;
+        target[i] = sourceElementIndex >= 0 && sourceElementIndex < values.length
+            ? values[sourceElementIndex]!
+            : NaN;
+    }
+}
+
 export class ContourManager {
     private lutTexture: THREE.DataTexture;
     private material: THREE.ShaderMaterial | null = null;
@@ -41,6 +65,7 @@ export class ContourManager {
                 u_min: { value: config.min_value },
                 u_max: { value: config.max_value },
                 u_deform_scale: { value: 0.0 },
+                u_use_flat_shading: { value: false },
                 u_nan_color: { value: new THREE.Vector4(...config.nan_color) },
                 u_above_color: { value: new THREE.Vector4(...config.above_range_color) },
                 u_below_color: { value: new THREE.Vector4(...config.below_range_color) },
@@ -56,17 +81,13 @@ export class ContourManager {
      * Update the scalar values on the geometry for contour rendering.
      *
      * @param geometry - BufferGeometry with 'scalarValue' attribute
-     * @param values - Float64 field values (nodal: per-node, elemental: per-surface-tri)
+     * @param values - Float64 field values (nodal: per-node, elemental: per-element)
      * @param location - 'nodal' or 'elemental'
-     * @param surfaceElementMap - mapping surface tri → source element (for elemental)
-     * @param surfaceIndices - surface triangle indices (for elemental flat shading)
      */
     applyScalarField(
         geometry: THREE.BufferGeometry,
         values: Float64Array,
         location: 'nodal' | 'elemental',
-        surfaceElementMap?: Int32Array,
-        surfaceIndices?: Int32Array,
     ): { min: number; max: number } {
         const [min, max] = finiteMinMax(values);
 
@@ -74,27 +95,26 @@ export class ContourManager {
         const scalarArray = scalarAttr.array as Float32Array;
 
         if (location === 'nodal') {
-            // Per-vertex scalar values
-            for (let i = 0; i < scalarArray.length; i++) {
-                scalarArray[i] = i < values.length ? values[i]! : NaN;
+            const sourceNodeIndexAttr = geometry.getAttribute('sourceNodeIndex') as THREE.BufferAttribute | undefined;
+            if (!sourceNodeIndexAttr) {
+                throw new Error('Surface geometry is missing sourceNodeIndex for nodal contouring');
             }
-        } else if (location === 'elemental' && surfaceElementMap && surfaceIndices) {
-            // Elemental: each surface triangle's 3 vertices get the same scalar
-            // (the parent element's value) for flat shading
-            const nTris = surfaceIndices.length / 3;
-            // Reset all to NaN first
-            scalarArray.fill(NaN);
-            for (let tri = 0; tri < nTris; tri++) {
-                const elemIdx = surfaceElementMap[tri]!;
-                const val = elemIdx < values.length ? values[elemIdx]! : NaN;
-                // Set all 3 vertices of this triangle
-                for (let v = 0; v < 3; v++) {
-                    const nodeIdx = surfaceIndices[tri * 3 + v]!;
-                    scalarArray[nodeIdx] = val;
-                }
+            mapNodalValuesToSurfaceVertices(values, sourceNodeIndexAttr.array as ArrayLike<number>, scalarArray);
+        } else {
+            const sourceElementIndexAttr = geometry.getAttribute('sourceElementIndex') as THREE.BufferAttribute | undefined;
+            if (!sourceElementIndexAttr) {
+                throw new Error('Surface geometry is missing sourceElementIndex for elemental contouring');
             }
+            mapElementalValuesToSurfaceVertices(
+                values,
+                sourceElementIndexAttr.array as ArrayLike<number>,
+                scalarArray,
+            );
         }
 
+        if (this.material) {
+            this.material.uniforms['u_use_flat_shading']!.value = location === 'elemental';
+        }
         scalarAttr.needsUpdate = true;
         return { min, max };
     }

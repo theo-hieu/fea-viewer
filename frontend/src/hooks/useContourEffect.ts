@@ -38,8 +38,6 @@ export function useContourEffect(refs: ContourEffectRefs): void {
     const modelId = useModelStore((s) => s.modelId);
     const status = useModelStore((s) => s.status);
     const fields = useModelStore((s) => s.fields);
-    const surfaceIndices = useModelStore((s) => s.surfaceIndices);
-    const surfaceElementMap = useModelStore((s) => s.surfaceElementMap);
 
     const colorMapConfig = useViewStore((s) => s.colorMapConfig);
 
@@ -120,7 +118,7 @@ export function useContourEffect(refs: ContourEffectRefs): void {
 
                 // 6. Get current geometry and apply scalar field
                 const baseGeom = meshManager.getBaseGeometry();
-                if (!baseGeom || !surfaceIndices) return;
+                if (!baseGeom) return;
 
                 const currentConfig = useViewStore.getState().colorMapConfig;
 
@@ -135,8 +133,6 @@ export function useContourEffect(refs: ContourEffectRefs): void {
                     baseGeom,
                     values_f64,
                     field.location as 'nodal' | 'elemental',
-                    surfaceElementMap ?? undefined,
-                    surfaceIndices ?? undefined,
                 );
 
                 // 8. Update range on material
@@ -174,8 +170,7 @@ export function useContourEffect(refs: ContourEffectRefs): void {
         return () => {
             controller.abort();
         };
-    }, [activeFieldId, activeTimestep, modelId, status, fields,
-        surfaceIndices, surfaceElementMap, refs, colorMapConfig]);
+    }, [activeFieldId, activeTimestep, modelId, status, fields, refs, colorMapConfig]);
 
     // --- LUT switch reaction ---
     useEffect(() => {

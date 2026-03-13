@@ -27,11 +27,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pickle
+import signal
+import subprocess
+import sys
 import tempfile
 import traceback
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import redis
@@ -44,11 +49,59 @@ from app.parsing.normalizer import normalize
 from app.parsing.storage_writer import write_model
 from app.parsing.surface_extractor import extract_surface
 from app.parsing.validator import validate
-from app.parsing.vtk_parser import parse_vtk
 from app.config import settings
 from app.tasks.celery_app import celery_app
+from app.tasks.task_failure_handler import write_terminal_failure
+
+try:
+    from billiard.exceptions import WorkerLostError
+except Exception:  # pragma: no cover - fallback for stripped test environments
+    class WorkerLostError(RuntimeError):
+        pass
+
+try:
+    from celery.signals import task_failure
+except Exception:  # pragma: no cover - fallback for stripped test environments
+    task_failure = None
 
 logger = logging.getLogger(__name__)
+
+PARSE_SUBPROCESS_TIMEOUT_CODE = "parse_subprocess_timeout"
+PARSE_SUBPROCESS_EXIT_CODE = "parse_subprocess_failed"
+PARSE_SUBPROCESS_SIGNAL_CODE = "parse_subprocess_killed"
+PARSE_SUBPROCESS_OUTPUT_CODE = "parse_subprocess_output_invalid"
+PARSE_SUBPROCESS_EXCEPTION_CODE = "parse_subprocess_exception"
+TASK_WORKER_LOST_CODE = "parse_worker_lost"
+TASK_UNEXPECTED_TERMINATION_CODE = "parse_task_unexpected_termination"
+TASK_MISSING_RESULT_CODE = "parse_result_missing"
+FILE_READ_ERROR_CODE = "parse_input_unreadable"
+UNSUPPORTED_FORMAT_CODE = "unsupported_file_format"
+RAW_UPLOAD_MISSING_CODE = "raw_upload_missing"
+NORMALIZATION_FAILED_CODE = "normalize_failed"
+VALIDATION_FAILED_CODE = "validation_failed"
+SURFACE_EXTRACTION_FAILED_CODE = "surface_extraction_failed"
+STORAGE_WRITE_FAILED_CODE = "storage_write_failed"
+
+
+@dataclass(frozen=True)
+class ParseSupervisorFailure:
+    error_code: str
+    error_message: str
+    technical_message: str | None = None
+
+
+@dataclass(frozen=True)
+class ParseSubprocessResult:
+    payload: ParseResult | ParseError | None = None
+    failure: ParseSupervisorFailure | None = None
+    exit_code: int | None = None
+    timed_out: bool = False
+    stdout: str = ""
+    stderr: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.failure is None and self.payload is not None
 
 
 def _write_model_status(
@@ -69,6 +122,213 @@ def _safe_log(level: str, message: str, **extra: Any) -> None:
     except Exception:
         fallback = ", ".join(f"{key}={value!r}" for key, value in extra.items())
         logger.log(getattr(logging, level.upper(), logging.INFO), f"{message} | {fallback}")
+
+
+def _summarize_stream(stream: str, limit: int = 400) -> str:
+    cleaned = " ".join(stream.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit]}..."
+
+
+def _subprocess_failure_from_completed_process(
+    filename: str,
+    completed: subprocess.CompletedProcess[str],
+) -> ParseSupervisorFailure | None:
+    if completed.returncode == 0:
+        return None
+
+    stdout_summary = _summarize_stream(completed.stdout)
+    stderr_summary = _summarize_stream(completed.stderr)
+    if completed.returncode < 0:
+        signal_number = -completed.returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+        except ValueError:
+            signal_name = f"SIG{signal_number}"
+        return ParseSupervisorFailure(
+            error_code=PARSE_SUBPROCESS_SIGNAL_CODE,
+            error_message=(
+                f"Parsing failed for '{filename}' because the parser process was terminated by {signal_name}."
+            ),
+            technical_message=f"stdout={stdout_summary}; stderr={stderr_summary}",
+        )
+
+    return ParseSupervisorFailure(
+        error_code=PARSE_SUBPROCESS_EXIT_CODE,
+        error_message=(
+            f"Parsing failed for '{filename}' because the parser process exited unexpectedly."
+        ),
+        technical_message=f"exit_code={completed.returncode}; stdout={stdout_summary}; stderr={stderr_summary}",
+    )
+
+
+def _decode_parse_subprocess_payload(
+    *,
+    envelope_path: Path,
+    filename: str,
+) -> ParseResult | ParseError | ParseSupervisorFailure:
+    try:
+        envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return ParseSupervisorFailure(
+            error_code=PARSE_SUBPROCESS_OUTPUT_CODE,
+            error_message=f"Parsing failed for '{filename}' because the parser returned malformed output.",
+            technical_message=str(exc),
+        )
+
+    kind = envelope.get("kind")
+    payload_path = envelope.get("payload_path")
+    if kind not in {"success", "error"} or not isinstance(payload_path, str):
+        return ParseSupervisorFailure(
+            error_code=PARSE_SUBPROCESS_OUTPUT_CODE,
+            error_message=f"Parsing failed for '{filename}' because the parser returned malformed output.",
+            technical_message=f"envelope={envelope!r}",
+        )
+
+    try:
+        with Path(payload_path).open("rb") as handle:
+            payload = pickle.load(handle)
+    except Exception as exc:
+        return ParseSupervisorFailure(
+            error_code=PARSE_SUBPROCESS_OUTPUT_CODE,
+            error_message=f"Parsing failed for '{filename}' because the parser returned malformed output.",
+            technical_message=str(exc),
+        )
+
+    if kind == "success" and isinstance(payload, ParseResult):
+        return payload
+    if kind == "error" and isinstance(payload, ParseError):
+        return payload
+
+    return ParseSupervisorFailure(
+        error_code=PARSE_SUBPROCESS_OUTPUT_CODE,
+        error_message=f"Parsing failed for '{filename}' because the parser returned malformed output.",
+        technical_message=f"kind={kind}, payload_type={type(payload).__name__}",
+    )
+
+
+def run_parse_subprocess(filepath: str, filename: str) -> ParseSubprocessResult:
+    with tempfile.TemporaryDirectory(prefix="parse-supervisor-") as temp_dir:
+        temp_root = Path(temp_dir)
+        envelope_path = temp_root / "parse_result.json"
+        payload_path = temp_root / "parse_result.pkl"
+        command = [
+            sys.executable,
+            "-m",
+            "app.parsing.parse_subprocess_runner",
+            "--input",
+            filepath,
+            "--filename",
+            filename,
+            "--output",
+            str(envelope_path),
+            "--payload",
+            str(payload_path),
+        ]
+        _safe_log(
+            "info",
+            "Starting parse subprocess",
+            filename=filename,
+            command=command,
+            timeout_seconds=settings.PARSE_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=settings.PARSE_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            _safe_log(
+                "error",
+                "Parse subprocess timed out",
+                filename=filename,
+                timeout_seconds=settings.PARSE_SUBPROCESS_TIMEOUT_SECONDS,
+                stdout_summary=_summarize_stream(stdout),
+                stderr_summary=_summarize_stream(stderr),
+            )
+            return ParseSubprocessResult(
+                failure=ParseSupervisorFailure(
+                    error_code=PARSE_SUBPROCESS_TIMEOUT_CODE,
+                    error_message=(
+                        f"Parsing timed out for '{filename}' after "
+                        f"{settings.PARSE_SUBPROCESS_TIMEOUT_SECONDS} seconds."
+                    ),
+                    technical_message=f"stdout={_summarize_stream(stdout)}; stderr={_summarize_stream(stderr)}",
+                ),
+                timed_out=True,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        _safe_log(
+            "info",
+            "Parse subprocess finished",
+            filename=filename,
+            exit_code=completed.returncode,
+            stdout_summary=_summarize_stream(completed.stdout),
+            stderr_summary=_summarize_stream(completed.stderr),
+        )
+
+        failure = _subprocess_failure_from_completed_process(filename, completed)
+        if failure is not None:
+            return ParseSubprocessResult(
+                failure=failure,
+                exit_code=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+
+        decoded = _decode_parse_subprocess_payload(envelope_path=envelope_path, filename=filename)
+        if isinstance(decoded, ParseSupervisorFailure):
+            return ParseSubprocessResult(
+                failure=decoded,
+                exit_code=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+        return ParseSubprocessResult(
+            payload=decoded,
+            exit_code=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+
+def _parse_error_from_supervisor_failure(
+    filename: str,
+    failure: ParseSupervisorFailure,
+) -> ParseError:
+    return ParseError(
+        error_type="ParseSupervisorFailure",
+        error_code=failure.error_code,
+        error_message=failure.error_message,
+        traceback_meshio=None,
+        traceback_vtk=None,
+        source_filename=filename,
+        technical_message=failure.technical_message,
+        raw_file_preserved=True,
+    )
+
+
+def _force_terminal_task_error(
+    model_id: str,
+    *,
+    error_code: str,
+    error_message: str,
+    reason: str,
+) -> None:
+    write_terminal_failure(
+        model_id,
+        error_code=error_code,
+        error_message=error_message,
+        extra={"reason": reason},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -241,13 +501,14 @@ def run_parse_job(
     except Exception as exc:
         duration = time.monotonic() - start_time
         error_msg = f"Cannot read file '{filename}': {exc}"
-        emit(ProgressStage.ERROR, 0, error_msg)
+        emit(ProgressStage.ERROR, 0, error_msg, detail={"error_code": FILE_READ_ERROR_CODE})
         _log_audit(model_id, filename, duration, error=error_msg)
         return ParseJobResult(
             model_id=model_id,
             status=JobStatus.ERROR,
             duration_seconds=duration,
             error_message=error_msg,
+            error_code=FILE_READ_ERROR_CODE,
             progress_events=events,
         )
 
@@ -259,13 +520,14 @@ def run_parse_job(
             f"Detected format '{detection.detected_format.value}' is not supported "
             f"for parsing in the current MVP."
         )
-        emit(ProgressStage.ERROR, 0, error_msg)
+        emit(ProgressStage.ERROR, 0, error_msg, detail={"error_code": UNSUPPORTED_FORMAT_CODE})
         _log_audit(model_id, filename, duration, error=error_msg)
         return ParseJobResult(
             model_id=model_id,
             status=JobStatus.ERROR,
             duration_seconds=duration,
             error_message=error_msg,
+            error_code=UNSUPPORTED_FORMAT_CODE,
             warnings=detection.warnings,
             warning_count=len(detection.warnings),
             progress_events=events,
@@ -277,7 +539,23 @@ def run_parse_job(
     emit(ProgressStage.PARSING_FIELDS, 55, "Parsing result fields...")
     emit(ProgressStage.READING_METADATA, 75, "Reading metadata...")
 
-    parse_output = parse_vtk(filepath, filename=filename)
+    subprocess_result = run_parse_subprocess(filepath, filename)
+    if subprocess_result.failure is not None:
+        parse_output: ParseResult | ParseError = _parse_error_from_supervisor_failure(
+            filename,
+            subprocess_result.failure,
+        )
+    elif subprocess_result.payload is None:
+        parse_output = _parse_error_from_supervisor_failure(
+            filename,
+            ParseSupervisorFailure(
+                error_code=TASK_MISSING_RESULT_CODE,
+                error_message=f"Parsing failed for '{filename}' because no parse result was returned.",
+                technical_message=None,
+            ),
+        )
+    else:
+        parse_output = subprocess_result.payload
 
     duration = time.monotonic() - start_time
 
@@ -288,6 +566,7 @@ def run_parse_job(
             "error_code": parse_output.error_code,
             "error_type": parse_output.error_type,
             "raw_file_preserved": parse_output.raw_file_preserved,
+            "technical_message": parse_output.technical_message,
         })
         _log_audit(model_id, filename, duration, error=error_msg)
         return ParseJobResult(
@@ -409,9 +688,20 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         raw_bytes = storage.get_object_stream(raw_key)
         if not raw_bytes:
             error_msg = f"Raw key {raw_key} not found in storage."
-            db.update_model_status(model_id, "error", error_msg)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 0, error_msg))
-            return {"status": "error", "error": error_msg, "model_id": model_id}
+            db.update_model_status(model_id, "error", error_msg, RAW_UPLOAD_MISSING_CODE)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                0,
+                error_msg,
+                detail={"error_code": RAW_UPLOAD_MISSING_CODE},
+            ))
+            return {
+                "status": "error",
+                "error": error_msg,
+                "error_code": RAW_UPLOAD_MISSING_CODE,
+                "model_id": model_id,
+            }
 
         # Create temporary file for meshio
         fd, temp_path = tempfile.mkstemp(suffix=".vtu")
@@ -448,9 +738,15 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Normalization failed: {e}"
             _safe_log("error", "Normalization failed", model_id=model_id, error=error_msg)
-            _write_model_status(db, model_id, "error", error_msg)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
-            return {"status": "error", "error": error_msg, "model_id": model_id}
+            _write_model_status(db, model_id, "error", error_msg, NORMALIZATION_FAILED_CODE)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": NORMALIZATION_FAILED_CODE},
+            ))
+            return {"status": "error", "error": error_msg, "error_code": NORMALIZATION_FAILED_CODE, "model_id": model_id}
 
         # 3. Validate
         publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 85, "Validating model..."))
@@ -459,9 +755,15 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
             error_details = "; ".join(e.message for e in val_result.errors)
             error_msg = f"Validation failed: {error_details}"
             _safe_log("error", "Validation failed", model_id=model_id, error=error_msg)
-            _write_model_status(db, model_id, "error", error_msg)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
-            return {"status": "error", "error": error_msg, "model_id": model_id}
+            _write_model_status(db, model_id, "error", error_msg, VALIDATION_FAILED_CODE)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": VALIDATION_FAILED_CODE},
+            ))
+            return {"status": "error", "error": error_msg, "error_code": VALIDATION_FAILED_CODE, "model_id": model_id}
 
         # 4. Extract Surface
         publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 90, "Extracting surfaces..."))
@@ -470,9 +772,15 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Surface extraction failed: {e}"
             _safe_log("error", "Surface extraction failed", model_id=model_id, error=error_msg)
-            _write_model_status(db, model_id, "error", error_msg)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
-            return {"status": "error", "error": error_msg, "model_id": model_id}
+            _write_model_status(db, model_id, "error", error_msg, SURFACE_EXTRACTION_FAILED_CODE)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": SURFACE_EXTRACTION_FAILED_CODE},
+            ))
+            return {"status": "error", "error": error_msg, "error_code": SURFACE_EXTRACTION_FAILED_CODE, "model_id": model_id}
 
         # 5. Write to Storage & Postgres 
         publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 95, "Writing to storage..."))
@@ -489,27 +797,63 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
         except Exception as e:
             error_msg = f"Storage write failed: {e}"
             _safe_log("error", "Storage write failed", model_id=model_id, error=error_msg)
-            _write_model_status(db, model_id, "error", error_msg)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
-            return {"status": "error", "error": error_msg, "model_id": model_id}
+            _write_model_status(db, model_id, "error", error_msg, STORAGE_WRITE_FAILED_CODE)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": STORAGE_WRITE_FAILED_CODE},
+            ))
+            return {"status": "error", "error": error_msg, "error_code": STORAGE_WRITE_FAILED_CODE, "model_id": model_id}
 
         _safe_log("info", "Parse succeeded", model_id=model_id, written_keys=len(write_result.written_keys))
         _write_model_status(db, model_id, "ready")
         publish(ProgressEvent(model_id, ProgressStage.COMPLETE, 100, "Parsing complete"))
         return {"status": "ready", "model_id": model_id, "written_keys": len(write_result.written_keys)}
 
+    except WorkerLostError:
+        error_msg = f"Parsing failed for '{filename}' because the worker process was lost."
+        _force_terminal_task_error(
+            model_id,
+            error_code=TASK_WORKER_LOST_CODE,
+            error_message=error_msg,
+            reason="worker_lost_exception",
+        )
+        try:
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": TASK_WORKER_LOST_CODE},
+            ))
+        except Exception:
+            pass
+        return {"status": "error", "error": error_msg, "error_code": TASK_WORKER_LOST_CODE, "model_id": model_id}
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Unhandled exception in process_upload: {e}\n{traceback.format_exc()}")
         try:
-            _write_model_status(db, model_id, "error", error_msg)
+            _write_model_status(db, model_id, "error", error_msg, TASK_UNEXPECTED_TERMINATION_CODE)
         except Exception:
             pass
         try:
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, error_msg))
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                error_msg,
+                detail={"error_code": TASK_UNEXPECTED_TERMINATION_CODE},
+            ))
         except Exception:
             pass
-        return {"status": "error", "error": error_msg, "model_id": model_id}
+        return {
+            "status": "error",
+            "error": error_msg,
+            "error_code": TASK_UNEXPECTED_TERMINATION_CODE,
+            "model_id": model_id,
+        }
 
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -517,3 +861,32 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
                 os.unlink(temp_path)
             except Exception as e:
                 logger.warning(f"Failed to unlink temp file {temp_path}: {e}")
+
+
+if task_failure is not None:
+    @task_failure.connect(weak=False)
+    def _handle_process_upload_failure(
+        sender: Any = None,
+        task_id: str | None = None,
+        exception: BaseException | None = None,
+        args: tuple[Any, ...] | None = None,
+        kwargs: dict[str, Any] | None = None,
+        **signal_kwargs: Any,
+    ) -> None:
+        task_name = getattr(sender, "name", sender)
+        if task_name != "app.tasks.parse_task.process_upload":
+            return
+        if not args:
+            return
+        model_id = args[0]
+        filename = args[2] if len(args) > 2 else "uploaded file"
+        exc = exception or signal_kwargs.get("reason")
+        if not isinstance(exc, WorkerLostError):
+            return
+        error_message = f"Parsing failed for '{filename}' because the worker process terminated unexpectedly."
+        _force_terminal_task_error(
+            model_id,
+            error_code=TASK_WORKER_LOST_CODE,
+            error_message=error_message,
+            reason="celery_task_failure_signal",
+        )

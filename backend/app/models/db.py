@@ -122,6 +122,7 @@ class PostgresMetadataStore(ApiMetadataStore):
         with self._get_session() as session:
             row = session.get(ModelRow, model_id)
             if not row: return None
+            props = row.properties or {}
             return {
                 "id": row.id,
                 "name": row.name,
@@ -129,11 +130,12 @@ class PostgresMetadataStore(ApiMetadataStore):
                 "node_count": row.node_count,
                 "element_count": row.element_count,
                 "field_count": row.field_count,
-                "unit_system": row.properties.get("unit_system", {"length": "unspecified", "force": "unspecified"}),
-                "warnings": row.properties.get("warnings", []),
-                "warnings_count": len(row.properties.get("warnings", [])),
-                "error_message": row.properties.get("error_message"),
-                "error_code": row.properties.get("error_code"),
+                "metadata": props.get("metadata", {}),
+                "unit_system": props.get("unit_system", {"length": "unspecified", "force": "unspecified"}),
+                "warnings": props.get("warnings", []),
+                "warnings_count": len(props.get("warnings", [])),
+                "error_message": props.get("error_message"),
+                "error_code": props.get("error_code"),
             }
 
     def create_model(self, model_id: str, row: dict[str, Any]) -> None:

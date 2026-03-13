@@ -87,6 +87,30 @@ Backend tests force temp artifacts into a dedicated writable temp root so
 Windows temp-directory permission issues do not block the parser and task
 suites.
 
+Recommended parser crash-regression checks:
+```bash
+cd backend
+pytest tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py -q
+```
+
+Recommended metadata regression checks:
+```bash
+cd backend
+pytest tests/api/test_metadata_persistence.py tests/api/test_routes_models.py -q
+```
+
+```bash
+cd frontend
+npm test -- --run tests/unit/modelMetadataApi.test.ts
+```
+
+Recommended quality checks for the crash-safe parser path:
+```bash
+cd backend
+python -m ruff check app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m mypy app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+```
+
 Alternative: run tests in the dedicated backend test image:
 ```bash
 docker build --target test -t fea-viewer-backend:test ./backend
@@ -112,8 +136,8 @@ npm run build
 Backend:
 ```bash
 cd backend
-python -m ruff check app/api/v1/routes_models.py app/parsing/models.py app/parsing/vtk_parser.py app/tasks/parse_task.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
-python -m mypy app/api/v1/routes_models.py app/parsing/models.py app/parsing/vtk_parser.py app/tasks/parse_task.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m ruff check app/api/v1/routes_models.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m mypy app/api/v1/routes_models.py app/models/db.py app/parsing/models.py app/parsing/vtk_parser.py app/parsing/parse_subprocess_runner.py app/tasks/task_failure_handler.py app/tasks/parse_task.py tests/api/test_metadata_persistence.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
 pytest tests -q
 ```
 

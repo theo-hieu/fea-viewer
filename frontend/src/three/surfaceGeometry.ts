@@ -7,6 +7,7 @@ export interface SurfaceGeometryStats {
     normalsLength: number;
     surfaceElementMapLength: number;
     vertexCount: number;
+    renderVertexCount: number;
     triangleCount: number;
     minIndex: number;
     maxIndex: number;
@@ -24,7 +25,6 @@ export class SurfaceGeometryError extends Error {
 export interface PreparedSurfaceGeometry {
     geometry: THREE.BufferGeometry;
     positions: Float32Array;
-    renderIndices: Uint32Array;
     stats: SurfaceGeometryStats;
 }
 
@@ -42,10 +42,12 @@ export function prepareSurfaceGeometry(params: {
     } = params;
     const positions = float64ToFloat32(nodeCoords_f64);
     const vertexCount = positions.length / 3;
+    const renderVertexCount = surfaceIndices.length;
 
     const stats = collectSurfaceGeometryStats({
         positionsLength: positions.length,
         vertexCount,
+        renderVertexCount,
         surfaceIndices,
         surfaceNormals,
         surfaceElementMap,
@@ -94,18 +96,79 @@ export function prepareSurfaceGeometry(params: {
         );
     }
 
-    const renderIndices = Uint32Array.from(surfaceIndices);
+    const renderPositions = new Float32Array(renderVertexCount * 3);
+    const smoothNormals = new Float32Array(renderVertexCount * 3);
+    const flatNormals = new Float32Array(renderVertexCount * 3);
+    const sourceNodeIndices = new Uint32Array(renderVertexCount);
+    const sourceElementIndices = new Int32Array(renderVertexCount);
+
+    for (let tri = 0; tri < surfaceIndices.length / 3; tri++) {
+        const triOffset = tri * 3;
+        const a = surfaceIndices[triOffset]!;
+        const b = surfaceIndices[triOffset + 1]!;
+        const c = surfaceIndices[triOffset + 2]!;
+        const elementIndex = surfaceElementMap ? surfaceElementMap[tri]! : -1;
+
+        const ax = positions[a * 3]!;
+        const ay = positions[a * 3 + 1]!;
+        const az = positions[a * 3 + 2]!;
+        const bx = positions[b * 3]!;
+        const by = positions[b * 3 + 1]!;
+        const bz = positions[b * 3 + 2]!;
+        const cx = positions[c * 3]!;
+        const cy = positions[c * 3 + 1]!;
+        const cz = positions[c * 3 + 2]!;
+
+        const abx = bx - ax;
+        const aby = by - ay;
+        const abz = bz - az;
+        const acx = cx - ax;
+        const acy = cy - ay;
+        const acz = cz - az;
+
+        let fnx = aby * acz - abz * acy;
+        let fny = abz * acx - abx * acz;
+        let fnz = abx * acy - aby * acx;
+        const faceLength = Math.hypot(fnx, fny, fnz) || 1;
+        fnx /= faceLength;
+        fny /= faceLength;
+        fnz /= faceLength;
+
+        for (let corner = 0; corner < 3; corner++) {
+            const sourceNodeIndex = surfaceIndices[triOffset + corner]!;
+            const renderOffset = (triOffset + corner) * 3;
+            const sourceOffset = sourceNodeIndex * 3;
+
+            renderPositions[renderOffset] = positions[sourceOffset]!;
+            renderPositions[renderOffset + 1] = positions[sourceOffset + 1]!;
+            renderPositions[renderOffset + 2] = positions[sourceOffset + 2]!;
+
+            smoothNormals[renderOffset] = surfaceNormals[sourceOffset]!;
+            smoothNormals[renderOffset + 1] = surfaceNormals[sourceOffset + 1]!;
+            smoothNormals[renderOffset + 2] = surfaceNormals[sourceOffset + 2]!;
+
+            flatNormals[renderOffset] = fnx;
+            flatNormals[renderOffset + 1] = fny;
+            flatNormals[renderOffset + 2] = fnz;
+
+            sourceNodeIndices[triOffset + corner] = sourceNodeIndex;
+            sourceElementIndices[triOffset + corner] = elementIndex;
+        }
+    }
+
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(surfaceNormals, 3));
-    geometry.setIndex(new THREE.BufferAttribute(renderIndices, 1));
+    geometry.setAttribute('position', new THREE.BufferAttribute(renderPositions, 3));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(smoothNormals, 3));
+    geometry.setAttribute('smoothNormal', new THREE.BufferAttribute(smoothNormals.slice(), 3));
+    geometry.setAttribute('flatNormal', new THREE.BufferAttribute(flatNormals, 3));
+    geometry.setAttribute('sourceNodeIndex', new THREE.BufferAttribute(sourceNodeIndices, 1));
+    geometry.setAttribute('sourceElementIndex', new THREE.BufferAttribute(sourceElementIndices, 1));
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
 
     return {
         geometry,
-        positions,
-        renderIndices,
+        positions: renderPositions,
         stats,
     };
 }
@@ -120,6 +183,7 @@ export function logSurfaceGeometryStats(
 function collectSurfaceGeometryStats(params: {
     positionsLength: number;
     vertexCount: number;
+    renderVertexCount: number;
     surfaceIndices: Int32Array;
     surfaceNormals: Float32Array;
     surfaceElementMap?: Int32Array | null;
@@ -127,6 +191,7 @@ function collectSurfaceGeometryStats(params: {
     const {
         positionsLength,
         vertexCount,
+        renderVertexCount,
         surfaceIndices,
         surfaceNormals,
         surfaceElementMap,
@@ -154,6 +219,7 @@ function collectSurfaceGeometryStats(params: {
         normalsLength: surfaceNormals.length,
         surfaceElementMapLength: surfaceElementMap?.length ?? 0,
         vertexCount,
+        renderVertexCount,
         triangleCount: surfaceIndices.length / 3,
         minIndex,
         maxIndex,

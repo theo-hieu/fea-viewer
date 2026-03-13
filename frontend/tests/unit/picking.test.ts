@@ -14,7 +14,12 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { encodeId, decodeId } from '@/three/PickingManager';
+import {
+    buildElementPickingColors,
+    buildNodePickingColors,
+    decodeId,
+    encodeId,
+} from '@/three/PickingManager';
 import { useModelStore } from '@/store/modelStore';
 import { useViewStore } from '@/store/viewStore';
 
@@ -139,6 +144,24 @@ describe('Picking — element-pick encoding', () => {
             expect(b).toBeCloseTo(((elemId + 1) & 0xFF) / 255);
         }
     });
+
+    it('adjacent triangles with shared source vertices keep isolated element IDs', () => {
+        const colors = buildElementPickingColors(new Int32Array([5, 5, 5, 12, 12, 12]));
+
+        const firstTriIds = [0, 1, 2].map((vertex) => decodeId(
+            Math.round(colors[vertex * 3]! * 255),
+            Math.round(colors[vertex * 3 + 1]! * 255),
+            Math.round(colors[vertex * 3 + 2]! * 255),
+        ) - 1);
+        const secondTriIds = [3, 4, 5].map((vertex) => decodeId(
+            Math.round(colors[vertex * 3]! * 255),
+            Math.round(colors[vertex * 3 + 1]! * 255),
+            Math.round(colors[vertex * 3 + 2]! * 255),
+        ) - 1);
+
+        expect(firstTriIds).toEqual([5, 5, 5]);
+        expect(secondTriIds).toEqual([12, 12, 12]);
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -146,18 +169,10 @@ describe('Picking — element-pick encoding', () => {
 // ---------------------------------------------------------------------------
 describe('Picking — node-pick vertex encoding', () => {
     it('each vertex gets a unique node ID', () => {
-        const nVertices = 4;
-        const colors = new Float32Array(nVertices * 3);
-
-        for (let i = 0; i < nVertices; i++) {
-            const [r, g, b] = encodeId(i + 1);
-            colors[i * 3] = r;
-            colors[i * 3 + 1] = g;
-            colors[i * 3 + 2] = b;
-        }
+        const colors = buildNodePickingColors(new Uint32Array([0, 1, 2, 3]));
 
         // Decode each vertex and verify unique IDs
-        for (let i = 0; i < nVertices; i++) {
+        for (let i = 0; i < 4; i++) {
             const r = Math.round(colors[i * 3]! * 255);
             const g = Math.round(colors[i * 3 + 1]! * 255);
             const b = Math.round(colors[i * 3 + 2]! * 255);
@@ -167,7 +182,10 @@ describe('Picking — node-pick vertex encoding', () => {
     });
 
     it('vertex 0 encodes as ID 1 (0 reserved for background)', () => {
-        const [r, g, b] = encodeId(0 + 1);
+        const colors = buildNodePickingColors(new Uint32Array([0]));
+        const r = colors[0]!;
+        const g = colors[1]!;
+        const b = colors[2]!;
         const decoded = decodeId(
             Math.round(r * 255), Math.round(g * 255), Math.round(b * 255),
         );

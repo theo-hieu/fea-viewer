@@ -4,6 +4,7 @@
 uniform sampler2D u_lut;
 uniform float u_min;
 uniform float u_max;
+uniform bool u_use_flat_shading;
 uniform vec4 u_nan_color;
 uniform vec4 u_above_color;
 uniform vec4 u_below_color;
@@ -42,8 +43,15 @@ void main() {
   vec4 color = texture2D(u_lut, vec2(t, 0.5));
 
   // Basic directional lighting
+  vec3 shadedNormal = normalize(v_normal);
+  if (u_use_flat_shading) {
+    shadedNormal = normalize(cross(dFdx(v_position), dFdy(v_position)));
+    if (!gl_FrontFacing) {
+      shadedNormal *= -1.0;
+    }
+  }
   vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
-  float diffuse = max(dot(normalize(v_normal), lightDir), 0.0);
+  float diffuse = max(dot(shadedNormal, lightDir), 0.0);
   float ambient = 0.3;
   float lighting = ambient + (1.0 - ambient) * diffuse;
 
