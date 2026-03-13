@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import traceback
+from xml.etree.ElementTree import ParseError as XmlParseError
 from typing import Optional
 
 import numpy as np
@@ -50,6 +51,9 @@ from app.parsing.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+INVALID_VTU_FORMAT_CODE = "invalid_vtu_format"
+GENERIC_VTU_PARSE_CODE = "vtu_parse_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +82,8 @@ def parse_vtk(filepath: str, filename: Optional[str] = None) -> ParseResult | Pa
 
     meshio_tb: Optional[str] = None
     vtk_tb: Optional[str] = None
+    meshio_exc: Optional[Exception] = None
+    vtk_exc: Optional[Exception] = None
 
     # --- Attempt 1: meshio ---
     try:
@@ -89,6 +95,7 @@ def parse_vtk(filepath: str, filename: Optional[str] = None) -> ParseResult | Pa
         )
         return result
     except Exception as exc:
+        meshio_exc = exc
         meshio_tb = traceback.format_exc()
         logger.warning(
             "meshio parse failed, attempting VTK fallback",
@@ -106,6 +113,7 @@ def parse_vtk(filepath: str, filename: Optional[str] = None) -> ParseResult | Pa
         )
         return result
     except Exception as exc:
+        vtk_exc = exc
         vtk_error_type = type(exc).__name__
         vtk_tb = traceback.format_exc()
         logger.error(
@@ -114,14 +122,67 @@ def parse_vtk(filepath: str, filename: Optional[str] = None) -> ParseResult | Pa
         )
 
     # --- Both failed ---
+    error_code, error_message = _classify_parse_failure(filename, meshio_exc, vtk_exc)
     return ParseError(
         error_type=vtk_error_type,
-        error_message=f"Failed to parse '{filename}': both meshio and VTK backends failed.",
+        error_code=error_code,
+        error_message=error_message,
         traceback_meshio=meshio_tb,
         traceback_vtk=vtk_tb,
         source_filename=filename,
+        technical_message=_format_technical_failure(meshio_exc, vtk_exc),
         raw_file_preserved=True,
     )
+
+
+def _classify_parse_failure(
+    filename: str,
+    meshio_exc: Optional[Exception],
+    vtk_exc: Optional[Exception],
+) -> tuple[str, str]:
+    if _looks_like_malformed_vtu(meshio_exc) or _looks_like_malformed_vtu(vtk_exc):
+        return (
+            INVALID_VTU_FORMAT_CODE,
+            f"Invalid VTU file '{filename}': the file is malformed, truncated, or not a readable VTK UnstructuredGrid document.",
+        )
+
+    return (
+        GENERIC_VTU_PARSE_CODE,
+        f"Failed to parse VTU file '{filename}'. The file may be corrupted or use unsupported VTU features.",
+    )
+
+
+def _looks_like_malformed_vtu(exc: Optional[Exception]) -> bool:
+    if exc is None:
+        return False
+    if isinstance(exc, XmlParseError):
+        return True
+
+    message = str(exc).lower()
+    markers = (
+        "not well-formed",
+        "mismatched tag",
+        "no element found",
+        "junk after document element",
+        "syntax error",
+        "xml",
+        "vtk reader returned empty output",
+        "vtkxml",
+        "unstructuredgrid",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _format_technical_failure(
+    meshio_exc: Optional[Exception],
+    vtk_exc: Optional[Exception],
+) -> Optional[str]:
+    parts: list[str] = []
+    if meshio_exc is not None:
+        parts.append(f"meshio={type(meshio_exc).__name__}: {meshio_exc}")
+    if vtk_exc is not None:
+        parts.append(f"vtk={type(vtk_exc).__name__}: {vtk_exc}")
+    return "; ".join(parts) if parts else None
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +500,6 @@ def _parse_with_vtk_fallback(filepath: str, filename: str) -> ParseResult:
 
 def _extract_cells_from_vtk(output, warnings: list[str]) -> tuple[list[CellBlock], int, list[str]]:
     """Extract cell blocks from VTK unstructured grid output."""
-    import vtk
 
     cell_blocks: list[CellBlock] = []
     total_count = 0

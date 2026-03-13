@@ -6,12 +6,7 @@ from unittest import mock
 sys.modules["psycopg2"] = mock.MagicMock()
 sys.modules["redis"] = mock.MagicMock()
 
-from unittest import mock
-import os
-import pytest
-
 from app.tasks.parse_task import process_upload
-from app.parsing.models import ParseError
 from app.tasks.parse_task import JobStatus
 from app.tasks.parse_task import ParseJobResult
 
@@ -28,10 +23,12 @@ class DummyDB:
     def __init__(self):
         self.status = {}
         self.errors = {}
+        self.error_codes = {}
     
-    def update_model_status(self, model_id, status, error_message=None):
+    def update_model_status(self, model_id, status, error_message=None, error_code=None):
         self.status[model_id] = status
         self.errors[model_id] = error_message
+        self.error_codes[model_id] = error_code
         
     def replace_result_fields(self, model_id, fields):
         pass
@@ -47,6 +44,10 @@ class DummyDB:
             self.errors[model_id] = row["properties"]["error_message"]
         elif "error_message" in row:
             self.errors[model_id] = row["error_message"]
+        if "properties" in row and "error_code" in row["properties"]:
+            self.error_codes[model_id] = row["properties"]["error_code"]
+        elif "error_code" in row:
+            self.error_codes[model_id] = row["error_code"]
         
     def transaction(self):
         from contextlib import contextmanager
@@ -114,6 +115,32 @@ def test_process_upload_parse_failure(mock_run, mock_pub, mock_s3, mock_db):
     assert "corrupted file" in res["error"]
     assert db_inst.status["model-123"] == "error"
     assert db_inst.errors["model-123"] == "corrupted file"
+
+
+@mock.patch("app.tasks.parse_task.PostgresMetadataStore")
+@mock.patch("app.tasks.parse_task.S3Client")
+@mock.patch("app.tasks.parse_task.redis_publisher_factory")
+@mock.patch("app.tasks.parse_task.run_parse_job")
+def test_process_upload_persists_structured_parse_error_code(mock_run, mock_pub, mock_s3, mock_db):
+    db_inst = DummyDB()
+    storage_inst = DummyStorage()
+
+    mock_db.return_value = db_inst
+    mock_s3.return_value = storage_inst
+    mock_pub.return_value = lambda event: None
+    mock_run.return_value = ParseJobResult(
+        model_id="model-123",
+        status=JobStatus.ERROR,
+        error_message="Invalid VTU file 'fail.vtu': the file is malformed.",
+        error_code="invalid_vtu_format",
+        duration_seconds=0.1,
+    )
+
+    res = process_upload("model-123", "uploads/model-123/raw/fail.vtu", "fail.vtu")
+
+    assert res["status"] == "error"
+    assert res["error_code"] == "invalid_vtu_format"
+    assert db_inst.error_codes["model-123"] == "invalid_vtu_format"
 
 
 @mock.patch("app.tasks.parse_task.PostgresMetadataStore")

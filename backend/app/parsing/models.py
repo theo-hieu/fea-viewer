@@ -16,7 +16,6 @@ Source authority:
 
 from __future__ import annotations
 
-import traceback
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from typing import Optional
@@ -276,6 +275,8 @@ class ParseError:
     traceback_meshio: Optional[str]
     traceback_vtk: Optional[str]
     source_filename: str
+    error_code: str = "vtu_parse_failed"
+    technical_message: Optional[str] = None
     raw_file_preserved: bool = True
 
 
@@ -434,4 +435,3 @@ class NormalizedModel:
     element_sets: list[NamedSet]
     result_fields: list[NormalizedResultField]
     warnings: list[str]
-

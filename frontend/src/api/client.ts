@@ -301,11 +301,35 @@ export async function deleteModel(modelId: string): Promise<void> {
  * Structured API error.
  */
 export class ApiError extends Error {
+    public readonly code: string | null;
+    public readonly userMessage: string;
+
     constructor(
         public readonly status: number,
         public readonly body: string,
     ) {
-        super(`API ${status}: ${body}`);
+        const parsed = parseApiErrorBody(body);
+        const userMessage = parsed.message ?? `Request failed with HTTP ${status}`;
+        super(userMessage);
         this.name = 'ApiError';
+        this.code = parsed.code;
+        this.userMessage = userMessage;
+    }
+}
+
+function parseApiErrorBody(body: string): { code: string | null; message: string | null } {
+    try {
+        const parsed = JSON.parse(body) as {
+            detail?: string;
+            error_code?: string;
+            error_message?: string;
+            message?: string;
+        };
+        return {
+            code: parsed.error_code ?? null,
+            message: parsed.error_message ?? parsed.message ?? parsed.detail ?? null,
+        };
+    } catch {
+        return { code: null, message: body || null };
     }
 }

@@ -189,5 +189,6 @@ export interface StatusResponse {
     status: ModelStatus;
     warnings_count: number;
     error_message?: string;
+    error_code?: string;
     progress?: number;
 }

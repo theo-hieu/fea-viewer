@@ -132,7 +132,8 @@ class PostgresMetadataStore(ApiMetadataStore):
                 "unit_system": row.properties.get("unit_system", {"length": "unspecified", "force": "unspecified"}),
                 "warnings": row.properties.get("warnings", []),
                 "warnings_count": len(row.properties.get("warnings", [])),
-                "error_message": row.properties.get("error_message")
+                "error_message": row.properties.get("error_message"),
+                "error_code": row.properties.get("error_code"),
             }
 
     def create_model(self, model_id: str, row: dict[str, Any]) -> None:
@@ -146,15 +147,23 @@ class PostgresMetadataStore(ApiMetadataStore):
             session.add(db_row)
             session.commit()
 
-    def update_model_status(self, model_id: str, status: str, error_message: str | None = None) -> None:
+    def update_model_status(
+        self,
+        model_id: str,
+        status: str,
+        error_message: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
         with self._get_session() as session:
             row = session.get(ModelRow, model_id)
             if row:
                 row.status = status
+                props = dict(row.properties) if row.properties else {}
                 if error_message is not None:
-                    props = dict(row.properties) if row.properties else {}
                     props["error_message"] = error_message
-                    row.properties = props
+                if error_code is not None:
+                    props["error_code"] = error_code
+                row.properties = props
                 session.commit()
 
     def get_model_tree(self, model_id: str) -> dict[str, Any]:
@@ -215,6 +224,8 @@ class PostgresMetadataStore(ApiMetadataStore):
                 props["tree"] = model_row["tree"]
             if "error_message" in model_row:
                 props["error_message"] = model_row["error_message"]
+            if "error_code" in model_row:
+                props["error_code"] = model_row["error_code"]
             row.properties = props
             session.commit()
             

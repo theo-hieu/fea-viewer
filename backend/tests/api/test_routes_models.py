@@ -20,7 +20,6 @@ Covers:
   - correct HTTP status codes for not found, validation failure, unsupported media, conflict, and server error cases
 """
 
-import uuid
 from typing import Any
 
 import pytest
@@ -50,9 +49,19 @@ class MockMetadataStore:
     def create_model(self, model_id: str, row: dict[str, Any]) -> None:
         self.models[model_id] = row
         
-    def update_model_status(self, model_id: str, status: str) -> None:
+    def update_model_status(
+        self,
+        model_id: str,
+        status: str,
+        error_message: str | None = None,
+        error_code: str | None = None,
+    ) -> None:
         if model_id in self.models:
             self.models[model_id]["status"] = status
+            if error_message is not None:
+                self.models[model_id]["error_message"] = error_message
+            if error_code is not None:
+                self.models[model_id]["error_code"] = error_code
             
     def get_model_tree(self, model_id: str) -> dict[str, Any]:
         model = self.models.get(model_id, {})
@@ -194,7 +203,7 @@ def test_upload_rejects_executable(clean_app):
 
 def test_status_endpoint(clean_app):
     db = app.dependency_overrides[get_metadata_store]()
-    db.models["m1"] = {"status": "ready", "warnings": ["w1", "w2"], "error_message": None}
+    db.models["m1"] = {"status": "ready", "warnings": ["w1", "w2"], "error_message": None, "error_code": None}
     
     req_id = "testing-req"
     resp = client.get("/api/v1/models/m1/status", headers={"X-Request-Id": req_id})
@@ -205,6 +214,25 @@ def test_status_endpoint(clean_app):
     assert data["status"] == "ready"
     assert data["warnings_count"] == 2
     assert data["error_message"] is None
+    assert data["error_code"] is None
+
+
+def test_status_endpoint_exposes_structured_parse_error(clean_app):
+    db = app.dependency_overrides[get_metadata_store]()
+    db.models["m1"] = {
+        "status": "error",
+        "warnings": [],
+        "error_code": "invalid_vtu_format",
+        "error_message": "Invalid VTU file 'broken.vtu': the file is malformed, truncated, or not a readable VTK UnstructuredGrid document.",
+    }
+
+    resp = client.get("/api/v1/models/m1/status")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["status"] == "error"
+    assert data["error_code"] == "invalid_vtu_format"
+    assert "Invalid VTU file" in data["error_message"]
 
 
 def test_metadata_endpoint_requires_ready_state(clean_app):

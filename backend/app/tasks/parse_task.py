@@ -26,30 +26,40 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+import traceback
 import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
+import redis
 from app.parsing.detect import (
-    DetectedFormat,
     MVPParseSupport,
     detect_format,
 )
 from app.parsing.models import ParseError, ParseResult
+from app.parsing.normalizer import normalize
+from app.parsing.storage_writer import write_model
+from app.parsing.surface_extractor import extract_surface
+from app.parsing.validator import validate
 from app.parsing.vtk_parser import parse_vtk
+from app.config import settings
+from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
 def _write_model_status(
-    db: PostgresMetadataStore,
+    db: Any,
     model_id: str,
     status: str,
     error_message: str | None = None,
+    error_code: str | None = None,
 ) -> None:
     _safe_log("info", "Writing final model status", model_id=model_id, status=status)
-    db.update_model_status(model_id, status, error_message)
+    db.update_model_status(model_id, status, error_message, error_code)
 
 
 def _safe_log(level: str, message: str, **extra: Any) -> None:
@@ -126,6 +136,7 @@ class ParseJobResult:
     warning_count: int = 0
     warnings: list[str] = field(default_factory=list)
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
     progress_events: list[ProgressEvent] = field(default_factory=list)
 
 
@@ -141,9 +152,6 @@ In production: publishes to Redis pub/sub channel `parse_progress:{model_id}`.
 In tests: appends to a list for assertion.
 """
 
-
-import redis
-from app.config import settings
 
 def redis_publisher_factory(model_id: str):
     """Creates a publisher that sends events to a Redis channel for this model."""
@@ -277,6 +285,7 @@ def run_parse_job(
     if isinstance(parse_output, ParseError):
         error_msg = parse_output.error_message
         emit(ProgressStage.ERROR, 0, error_msg, detail={
+            "error_code": parse_output.error_code,
             "error_type": parse_output.error_type,
             "raw_file_preserved": parse_output.raw_file_preserved,
         })
@@ -287,6 +296,7 @@ def run_parse_job(
             parse_error=parse_output,
             duration_seconds=duration,
             error_message=error_msg,
+            error_code=parse_output.error_code,
             progress_events=events,
         )
 
@@ -361,20 +371,6 @@ def _log_audit(
         logger.info("Parse job completed", extra=log_data)
 
 
-# ---------------------------------------------------------------------------
-# Celery Task Entrypoint
-# ---------------------------------------------------------------------------
-import os
-import tempfile
-import traceback
-from app.tasks.celery_app import celery_app
-
-from app.parsing.normalizer import normalize
-from app.parsing.validator import validate
-from app.parsing.surface_extractor import extract_surface
-from app.parsing.storage_writer import write_model
-
-
 def PostgresMetadataStore():
     """
     Lazily construct the concrete metadata store.
@@ -428,13 +424,26 @@ def process_upload(model_id: str, raw_key: str, filename: str) -> dict:
 
         if result.status == JobStatus.ERROR:
             _safe_log("error", "Parse failed", model_id=model_id, error=result.error_message)
-            _write_model_status(db, model_id, "error", result.error_message)
-            publish(ProgressEvent(model_id, ProgressStage.ERROR, 100, result.error_message or "Parsing failed"))
-            return {"status": "error", "error": result.error_message, "model_id": model_id}
+            _write_model_status(db, model_id, "error", result.error_message, result.error_code)
+            publish(ProgressEvent(
+                model_id,
+                ProgressStage.ERROR,
+                100,
+                result.error_message or "Parsing failed",
+                detail={"error_code": result.error_code},
+            ))
+            return {
+                "status": "error",
+                "error": result.error_message,
+                "error_code": result.error_code,
+                "model_id": model_id,
+            }
 
         # 2. Normalize
         publish(ProgressEvent(model_id, ProgressStage.PARSING_FIELDS, 80, "Normalizing data..."))
         try:
+            if result.parse_result is None:
+                raise ValueError("Parse result missing for successful parse job")
             normalized_model = normalize(result.parse_result)
         except Exception as e:
             error_msg = f"Normalization failed: {e}"

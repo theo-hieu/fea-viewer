@@ -99,6 +99,29 @@ npm test          # Unit tests
 npx playwright test  # E2E tests
 ```
 
+### CI Commands
+Frontend:
+```bash
+cd frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+Backend:
+```bash
+cd backend
+python -m ruff check app/api/v1/routes_models.py app/parsing/models.py app/parsing/vtk_parser.py app/tasks/parse_task.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+python -m mypy app/api/v1/routes_models.py app/parsing/models.py app/parsing/vtk_parser.py app/tasks/parse_task.py tests/api/test_routes_models.py tests/tasks/test_parse_task.py tests/tasks/test_process_upload.py tests/parsing/test_vtu_error_handling.py
+pytest tests -q
+```
+
+For GitHub branch protection, mark these jobs as required checks before merge:
+- `Backend Quality`
+- `Frontend Quality`
+- `Security Audit`
+
 ---
 
 ## 🏗️ Architecture

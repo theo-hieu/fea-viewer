@@ -23,8 +23,6 @@ import logging
 from unittest import mock
 
 import numpy as np
-import pytest
-
 from app.parsing.models import (
     CellBlock,
     ElementType,
@@ -35,11 +33,9 @@ from app.parsing.models import (
     ParseResult,
     ResultField,
     TimestepData,
-    UnitSystem,
 )
 from app.tasks.parse_task import (
     JobStatus,
-    ParseJobResult,
     ProgressEvent,
     ProgressStage,
     run_parse_job,
@@ -94,7 +90,8 @@ def make_parse_error() -> ParseError:
     """Create a ParseError for testing."""
     return ParseError(
         error_type="RuntimeError",
-        error_message="Both parsers failed.",
+        error_code="invalid_vtu_format",
+        error_message="Invalid VTU file 'model.vtu': the file is malformed.",
         traceback_meshio="meshio traceback...",
         traceback_vtk="vtk traceback...",
         source_filename="model.vtu",
@@ -107,7 +104,7 @@ def write_vtu(filepath: str) -> None:
         f.write('<?xml version="1.0"?>\n<VTKFile type="UnstructuredGrid">\n</VTKFile>\n')
 
 
-def collect_events(events: list[ProgressEvent]) -> list:
+def collect_events(events: list[ProgressEvent]):
     """Create a publisher that collects events into a list."""
     def publisher(event: ProgressEvent):
         events.append(event)
@@ -238,6 +235,7 @@ class TestParseFailure:
         assert result.status == JobStatus.ERROR
         assert result.parse_error is not None
         assert result.error_message is not None
+        assert result.error_code == "invalid_vtu_format"
 
     def test_error_event_emitted(self, tmp_path):
         filepath = str(tmp_path / "model.vtu")
@@ -252,6 +250,9 @@ class TestParseFailure:
 
         stages = [e.stage for e in events]
         assert ProgressStage.ERROR in stages
+        error_event = [e for e in events if e.stage == ProgressStage.ERROR][0]
+        assert error_event.detail is not None
+        assert error_event.detail["error_code"] == "invalid_vtu_format"
 
     def test_raw_file_preserved_on_error(self, tmp_path):
         filepath = str(tmp_path / "model.vtu")

@@ -5,10 +5,12 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
   security-audit:
-    name: Dependency & Image Scanning
+    name: Security Audit
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +26,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install pip-audit
-        run: pip install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
 
       - name: Run pip-audit on Backend
-        run: pip-audit backend
+        run: pip-audit -r backend/requirements.txt
         # Fails the pipeline if vulnerable packages exist
 
       # ----------------------------------------------------- #
@@ -37,6 +39,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Run npm audit on Frontend
         working-directory: ./frontend

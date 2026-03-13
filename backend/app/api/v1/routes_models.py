@@ -36,8 +36,8 @@ from fastapi import (
     UploadFile,
     status as http_status,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 import uuid
 import re
@@ -61,7 +61,13 @@ ALLOWED_MIME_TYPES = {
 class ApiMetadataStore(Protocol):
     def get_model(self, model_id: str) -> dict[str, Any] | None: ...
     def create_model(self, model_id: str, row: dict[str, Any]) -> None: ...
-    def update_model_status(self, model_id: str, status: str, error_message: str | None = None) -> None: ...
+    def update_model_status(
+        self,
+        model_id: str,
+        status: str,
+        error_message: str | None = None,
+        error_code: str | None = None,
+    ) -> None: ...
     def get_model_tree(self, model_id: str) -> dict[str, Any]: ...
     def get_fields(self, model_id: str) -> list[dict[str, Any]]: ...
     def get_field(self, model_id: str, field_id: str) -> dict[str, Any] | None: ...
@@ -154,6 +160,7 @@ class StatusResponse(BaseModel):
     status: str
     warnings_count: int
     error_message: str | None = None
+    error_code: str | None = None
 
 # ---------------------------------------------------------------------------
 # Routes
@@ -260,7 +267,8 @@ async def get_status(
     return _json_response({
         "status": row.get("status", "uploading"),
         "warnings_count": w_count,
-        "error_message": err_msg
+        "error_message": err_msg,
+        "error_code": row.get("error_code"),
     }, request)
 
 
@@ -303,6 +311,8 @@ async def get_nodes(
     row = _require_model_ready(db, id)
     nc = row.get("node_count", 0)
     blob = storage.get_object_stream(f"models/{id}/geometry/nodes.f64")
+    if blob is None:
+        raise HTTPException(status_code=404, detail="Node geometry missing in backend")
     return _binary_response(blob, "float64", f"[{nc}, 3]", _get_request_id(request))
 
 
@@ -441,6 +451,8 @@ async def get_set_members(
         raise HTTPException(status_code=404, detail="Set not found")
         
     blob = storage.get_object_stream(f"models/{id}/sets/{sid}/members.i32")
+    if blob is None:
+        raise HTTPException(status_code=404, detail="Set members missing in backend")
     return _binary_response(blob, "int32", f"[{s_meta.get('member_count', 0)}]", _get_request_id(request))
 
 

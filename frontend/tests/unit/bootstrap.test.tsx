@@ -142,7 +142,12 @@ describe('URL Bootstrap Flow', () => {
 
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true,
-            json: async () => ({ status: 'error', warnings_count: 0, error_message: 'File corrupted' }),
+            json: async () => ({
+                status: 'error',
+                warnings_count: 0,
+                error_code: 'invalid_vtu_format',
+                error_message: "Invalid VTU file 'broken.vtu': the file is malformed, truncated, or not a readable VTK UnstructuredGrid document.",
+            }),
         });
         vi.stubGlobal('fetch', fetchMock);
 
@@ -154,5 +159,6 @@ describe('URL Bootstrap Flow', () => {
 
         expect(screen.queryByText('Upload a VTK/VTU file to begin')).toBeNull();
         expect(useModelStore.getState().status).toBe('error');
+        expect(useModelStore.getState().errorMessage).toContain('Invalid VTU file');
     });
 });
