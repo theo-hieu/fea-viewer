@@ -54,10 +54,12 @@ from app.tasks.celery_app import celery_app
 from app.tasks.task_failure_handler import write_terminal_failure
 
 try:
-    from billiard.exceptions import WorkerLostError
+    from billiard.exceptions import WorkerLostError as _WorkerLostError
 except Exception:  # pragma: no cover - fallback for stripped test environments
-    class WorkerLostError(RuntimeError):
+    class _WorkerLostError(RuntimeError):
         pass
+
+WorkerLostError = _WorkerLostError
 
 try:
     from celery.signals import task_failure
@@ -129,6 +131,14 @@ def _summarize_stream(stream: str, limit: int = 400) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return f"{cleaned[:limit]}..."
+
+
+def _coerce_stream_text(stream: bytes | str | None) -> str:
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return stream
 
 
 def _subprocess_failure_from_completed_process(
@@ -242,8 +252,8 @@ def run_parse_subprocess(filepath: str, filename: str) -> ParseSubprocessResult:
                 timeout=settings.PARSE_SUBPROCESS_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
+            stdout = _coerce_stream_text(exc.stdout)
+            stderr = _coerce_stream_text(exc.stderr)
             _safe_log(
                 "error",
                 "Parse subprocess timed out",
