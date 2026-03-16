@@ -1,0 +1,70 @@
+import xml.etree.ElementTree as ET
+import random
+import os
+
+xml_data = '''<?xml version="1.0"?> 
+<VTKFile type="UnstructuredGrid" version="0.1"> 
+<UnstructuredGrid> 
+<Piece NumberOfPoints="60" NumberOfCells="24"> 
+<Points> 
+<DataArray type="Float64" NumberOfComponents="3"> 
+1 1 1 2 1 1 3 1 1 4 1 1 5 1 1 1 2 1 2 2 1 3 2 1 4 2 1 5 2 1 1 3 1 2 3 1 3 3 1 4 3 1 5 3 1 1 1 2 2 1 2 3 1 2 4 1 2 5 1 2 1 2 2 2 2 2 3 2 2 4 2 2 5 2 2 1 3 2 2 3 2 3 3 2 4 3 2 5 3 2 1 1 3 2 1 3 3 1 3 4 1 3 5 1 3 1 2 3 2 2 3 3 2 3 4 2 3 5 2 3 1 3 3 2 3 3 3 3 3 4 3 3 5 3 3 1 1 4 2 1 4 3 1 4 4 1 4 5 1 4 1 2 4 2 2 4 3 2 4 4 2 4 5 2 4 1 3 4 2 3 4 3 3 4 4 3 4 5 3 4 
+</DataArray> 
+</Points> 
+<Cells> 
+<DataArray type="Int32" Name="connectivity">
+0 1 6 5 15 16 21 20 1 2 7 6 16 17 22 21 2 3 8 7 17 18 23 22 3 4 9 8 18 19 24 23 5 6 11 10 20 21 26 25 6 7 12 11 21 22 27 26 7 8 13 12 22 23 28 27 8 9 14 13 23 24 29 28 15 16 21 20 30 31 36 35 16 17 22 21 31 32 37 36 17 18 23 22 32 33 38 37 18 19 24 23 33 34 39 38 20 21 26 25 35 36 41 40 21 22 27 26 36 37 42 41 22 23 28 27 37 38 43 42 23 24 29 28 38 39 44 43 30 31 36 35 45 46 51 50 31 32 37 36 46 47 52 51 32 33 38 37 47 48 53 52 33 34 39 38 48 49 54 53 35 36 41 40 50 51 56 55 36 37 42 41 51 52 57 56 37 38 43 42 52 53 58 57 38 39 44 43 53 54 59 58 
+ </DataArray> 
+<DataArray type="Int32" Name="offsets"> 
+8 16 24 32 40 48 56 64 72 80 88 96 104 112 120 128 136 144 152 160 168 176 184 192 </DataArray> 
+<DataArray type="Int32" Name="types"> 
+12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 12 </DataArray>
+</Cells> 
+<PointData>
+<DataArray type="Float64" Name="Displacement" format="ascii" NumberOfComponents="3"> 
+0.460916 0.77016 0.322472 0.784739 0.471357 0.0357627 0.175874 0.721758 0.473486 0.152721 0.341125 0.607389 0.191745 0.738427 0.24285 0.917424 0.269062 0.7655 0.188662 0.287498 0.0911135 0.576209 0.683363 0.546593 0.425729 0.644443 0.647618 0.679017 0.635787 0.945174 0.208935 0.709282 0.236231 0.119396 0.607304 0.450138 0.458725 0.661945 0.770286 0.350218 0.66201 0.416159 0.841929 0.832917 0.256441 0.613461 0.582249 0.540739 0.869941 0.264779 0.318074 0.119215 0.939829 0.645552 0.479463 0.639317 0.544716 0.647311 0.543886 0.721047 0.522495 0.993705 0.218677 0.105798 0.109697 0.0635914 0.40458 0.448373 0.365816 0.763505 0.627896 0.77198 0.932854 0.972741 0.192028 0.138874 0.696266 0.09382 0.525404 0.530344 0.86114 0.484853 0.393456 0.671431 0.741258 0.520052 0.347713 0.149997 0.586092 0.262145 0.0444541 0.754933 0.242785 0.442402 0.687796 0.359228 0.73634 0.394707 0.683416 0.704047 0.442305 0.0195776 0.330858 0.424309 0.27027 0.197054 0.821721 0.429921 0.887771 0.391183 0.769114 0.396792 0.808514 0.755077 0.377396 0.216019 0.790407 0.949304 0.327565 0.671264 0.438645 0.833501 0.768854 0.167254 0.86198 0.989872 0.514423 0.884281 0.588026 0.154752 0.199863 0.406955 0.748706 0.825584 0.789963 0.318524 0.534064 0.0899507 0.111706 0.136293 0.678652 0.495177 0.18971 0.495006 0.147608 0.0549741 0.850713 0.56056 0.929609 0.696667 0.582791 0.815397 0.879014 0.988912 0.000522375 0.865439 0.612566 0.98995 0.52768 0.479523 0.801348 0.227843 0.498094 0.900852 0.574661 0.845178 0.73864 0.585987 0.246735 0.666416 0.0834828 0.62596 0.660945 0.729752 0.890752 0.982303 0.769029 0.581446 0.928313 0.58009 </DataArray> 
+</PointData> 
+<CellData>
+<DataArray type="Float64" Name="Density" format="ascii" NumberOfComponents="1"> 
+0.0169829 0.12086 0.862711 0.484297 0.844856 0.209405 0.552291 0.629883 0.031991 0.614713 0.362411 0.0495326 0.48957 0.19251 0.123084 0.205494 0.146515 0.189072 0.0426524 0.635198 0.281867 0.538597 0.695163 0.499116 </DataArray> 
+</CellData> 
+</Piece> 
+</UnstructuredGrid> 
+</VTKFile> 
+'''
+
+root = ET.fromstring(xml_data)
+
+point_data = root.find('.//PointData')
+cell_data = root.find('.//CellData')
+
+point_data.set('Scalars', 'Reaction_Force')
+point_data.set('Vectors', 'Displacement')
+cell_data.set('Scalars', 'Von_Mises_Stress')
+cell_data.set('Tensors', 'Stress_Tensor')
+
+random.seed(42) # For reproducible output
+
+reaction_force_vals = ' '.join([f'{random.uniform(-1000, 1000):.4f}' for _ in range(180)])
+rf_da = ET.Element('DataArray', type='Float64', Name='Reaction_Force', format='ascii', NumberOfComponents='3')
+rf_da.text = '\n' + reaction_force_vals + '\n'
+point_data.append(rf_da)
+
+von_mises_vals = ' '.join([f'{random.uniform(10, 500):.4f}' for _ in range(24)])
+vms_da = ET.Element('DataArray', type='Float64', Name='Von_Mises_Stress', format='ascii', NumberOfComponents='1')
+vms_da.text = '\n' + von_mises_vals + '\n'
+cell_data.append(vms_da)
+
+stress_tensor_vals = ' '.join([f'{random.uniform(-200, 200):.4f}' for _ in range(216)])
+st_da = ET.Element('DataArray', type='Float64', Name='Stress_Tensor', format='ascii', NumberOfComponents='9')
+st_da.text = '\n' + stress_tensor_vals + '\n'
+cell_data.append(st_da)
+
+import xml.dom.minidom
+xmlstr = ET.tostring(root, encoding='utf-8').decode('utf-8')
+final_xml = '<?xml version="1.0"?>\n' + xmlstr
+
+with open(r'c:\Users\theoh\project\fea-viewer\hex_fea_enhanced.vtu', 'w') as f:
+    f.write(final_xml)
+
+print("SUCCESS")
