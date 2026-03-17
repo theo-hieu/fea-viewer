@@ -1,0 +1,27 @@
+# Python build/cache files
+venv/
+__pycache__/
+.pytest_cache/
+.pytest_tmp/
+pytest-cache-files-*/
+pytest-tmp/
+fea_viewer_backend.egg-info/
+alembic/versions/*.pyc
+
+# Docker
+.dockerignore
+Dockerfile
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+error.log
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
