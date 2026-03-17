@@ -40,6 +40,7 @@ export interface ViewState {
     setPickMode: (mode: 'node' | 'element') => void;
     setWireframeVisible: (visible: boolean) => void;
     toggleWireframe: () => void;
+    registerPartIds: (partIds: string[]) => void;
     setPartVisibility: (partId: string, visible: boolean) => void;
     setAllPartsVisible: (visible: boolean) => void;
     isolatePart: (partId: string) => void;
@@ -80,6 +81,23 @@ export const useViewStore = create<ViewState>((set) => ({
     setPickMode: (mode) => set({ pickMode: mode }),
     setWireframeVisible: (visible) => set({ wireframeVisible: visible }),
     toggleWireframe: () => set((s) => ({ wireframeVisible: !s.wireframeVisible })),
+    registerPartIds: (partIds) =>
+        set((s) => {
+            if (partIds.length === 0) {
+                return {};
+            }
+
+            const next = { ...s.partVisibility };
+            let changed = false;
+            for (const partId of partIds) {
+                if (!(partId in next)) {
+                    next[partId] = true;
+                    changed = true;
+                }
+            }
+
+            return changed ? { partVisibility: next } : {};
+        }),
     setPartVisibility: (partId, visible) =>
         set((s) => ({
             partVisibility: { ...s.partVisibility, [partId]: visible },
@@ -94,8 +112,13 @@ export const useViewStore = create<ViewState>((set) => ({
         }),
     isolatePart: (partId) =>
         set((s) => {
+            const keys = Object.keys(s.partVisibility);
+            if (keys.length === 0) {
+                return { partVisibility: { [partId]: true } };
+            }
+
             const updated: Record<string, boolean> = {};
-            for (const key of Object.keys(s.partVisibility)) {
+            for (const key of keys) {
                 updated[key] = key === partId;
             }
             return { partVisibility: updated };

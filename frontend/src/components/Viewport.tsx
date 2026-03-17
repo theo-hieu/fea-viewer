@@ -34,6 +34,40 @@ interface ViewportProps {
   containerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
+export const BOOTSTRAP_TIMEOUT_MS = 30_000;
+
+class BootstrapTimeoutError extends Error {
+  constructor(
+    public readonly step: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`Bootstrap timed out after ${timeoutMs}ms during ${step}`);
+    this.name = "BootstrapTimeoutError";
+  }
+}
+
+function withBootstrapTimeout<T>(
+  work: () => Promise<T>,
+  getStep: () => string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new BootstrapTimeoutError(getStep(), BOOTSTRAP_TIMEOUT_MS));
+    }, BOOTSTRAP_TIMEOUT_MS);
+
+    work().then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      },
+    );
+  });
+}
+
 function isDebugGeometryModeEnabled(): boolean {
   if (typeof window === "undefined") return false;
   const params = new URLSearchParams(window.location.search);
@@ -79,6 +113,7 @@ export const Viewport: React.FC<ViewportProps> = ({
   const setBootstrapIdle = useModelStore((s) => s.setBootstrapIdle);
   const setBootstrapError = useModelStore((s) => s.setBootstrapError);
   const wireframeVisible = useViewStore((s) => s.wireframeVisible);
+  const partVisibility = useViewStore((s) => s.partVisibility);
   const bootstrappedModelIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -168,152 +203,159 @@ export const Viewport: React.FC<ViewportProps> = ({
     )
       return;
 
+    let cancelled = false;
+    let currentStep = "bootstrap";
+
+    const updateStep = (step: string) => {
+      currentStep = step;
+      console.info("[Viewport] Bootstrap step", { modelId, step });
+      if (!cancelled) {
+        setBootstrapLoading(step);
+      }
+    };
+
+    const failStep = (step: string, error: unknown) => {
+      if (cancelled) return;
+      const reason =
+        error instanceof Error ? error.message : "Failed to load model";
+      console.error("[Viewport] Bootstrap failure", { modelId, step, error });
+      setBootstrapError(step, `Bootstrap failed during ${step}: ${reason}`);
+    };
+
     const loadModel = async () => {
       const sm = sceneManagerRef.current;
       const mm = meshManagerRef.current;
       const wm = wireframeManagerRef.current;
-      const failStep = (step: string, error: unknown) => {
-        const reason =
-          error instanceof Error ? error.message : "Failed to load model";
-        console.error("[Viewport] Bootstrap failure", { modelId, step, error });
-        setBootstrapError(step, `Bootstrap failed during ${step}: ${reason}`);
-      };
 
       if (!sm || !mm || !wm) {
-        failStep(
-          "renderer initialization",
-          new Error("Scene managers are not initialized"),
-        );
-        return;
+        throw new Error("Scene managers are not initialized");
       }
+      updateStep("loading metadata");
+      const metadataPromise = fetchModelMetadata(modelId);
+      const treePromise = fetchModelTree(modelId);
+      const fieldsPromise = fetchModelFields(modelId);
+      const setsPromise = fetchModelSets(modelId);
 
-      const updateStep = (step: string) => {
-        console.info("[Viewport] Bootstrap step", { modelId, step });
-        setBootstrapLoading(step);
-      };
+      updateStep("fetching geometry");
 
-      try {
-        console.info(`[Viewport] Status became ready for ${modelId}`);
-        console.info(`[Viewport] Bootstrap start for ${modelId}`);
-        updateStep("loading metadata");
-        const metadataPromise = fetchModelMetadata(modelId);
-        const treePromise = fetchModelTree(modelId);
-        const fieldsPromise = fetchModelFields(modelId);
-        const setsPromise = fetchModelSets(modelId);
+      const [nodeRes, surfaceRes] = await Promise.all([
+        fetchBinary(`/models/${modelId}/nodes`),
+        fetchSurfacesBinary(`/models/${modelId}/surfaces`),
+      ]);
 
-        updateStep("fetching geometry");
+      console.info("[Viewport] Nodes headers", {
+        modelId,
+        dtype: nodeRes.meta.dtype,
+        shape: nodeRes.meta.shape,
+        byteOrder: nodeRes.meta.byteOrder,
+      });
+      console.info("[Viewport] Surfaces headers", {
+        modelId,
+        dtype: surfaceRes.headers.dtype,
+        byteOrder: surfaceRes.headers.byteOrder,
+        shape: surfaceRes.headers.shape,
+        offsets: surfaceRes.headers.offsets,
+      });
 
-        const [nodeRes, surfaceRes] = await Promise.all([
-          fetchBinary(`/models/${modelId}/nodes`),
-          fetchSurfacesBinary(`/models/${modelId}/surfaces`),
-        ]);
+      const surfaceIndices = surfaceRes.surfaceIndices;
+      const surfaceNormals = surfaceRes.surfaceNormals;
+      const surfaceElementMap = surfaceRes.surfaceElementMap;
+      const nodeCoords_f64 = decodeTypedArray(
+        nodeRes.buffer,
+        nodeRes.meta.dtype,
+      ) as Float64Array;
 
-        console.info("[Viewport] Nodes headers", {
-          modelId,
-          dtype: nodeRes.meta.dtype,
-          shape: nodeRes.meta.shape,
-          byteOrder: nodeRes.meta.byteOrder,
-        });
-        console.info("[Viewport] Surfaces headers", {
-          modelId,
-          dtype: surfaceRes.headers.dtype,
-          byteOrder: surfaceRes.headers.byteOrder,
-          shape: surfaceRes.headers.shape,
-          offsets: surfaceRes.headers.offsets,
-        });
+      console.info("[Viewport] Parsed nodes length", {
+        modelId,
+        length: nodeCoords_f64.length,
+      });
+      console.info("[Viewport] Parsed surface indices length", {
+        modelId,
+        length: surfaceIndices.length,
+      });
+      console.info("[Viewport] Parsed surface normals length", {
+        modelId,
+        length: surfaceNormals.length,
+      });
+      console.info("[Viewport] Parsed surface element map length", {
+        modelId,
+        length: surfaceElementMap.length,
+      });
 
-        const surfaceIndices = surfaceRes.surfaceIndices;
-        const surfaceNormals = surfaceRes.surfaceNormals;
-        const surfaceElementMap = surfaceRes.surfaceElementMap;
-        const nodeCoords_f64 = decodeTypedArray(
-          nodeRes.buffer,
-          nodeRes.meta.dtype,
-        ) as Float64Array;
-
-        console.info("[Viewport] Parsed nodes length", {
-          modelId,
-          length: nodeCoords_f64.length,
-        });
-        console.info("[Viewport] Parsed surface indices length", {
-          modelId,
-          length: surfaceIndices.length,
-        });
-        console.info("[Viewport] Parsed surface normals length", {
-          modelId,
-          length: surfaceNormals.length,
-        });
-        console.info("[Viewport] Parsed surface element map length", {
-          modelId,
-          length: surfaceElementMap.length,
-        });
-
+      if (!cancelled) {
         setNodeCoords(nodeCoords_f64);
         setSurfaceData(surfaceIndices, surfaceNormals, surfaceElementMap);
+      }
 
-        updateStep("creating geometry");
-        console.info("[Viewport] Geometry creation started", { modelId });
-        mm.buildMesh(
-          nodeCoords_f64,
-          surfaceIndices,
-          surfaceNormals,
-          surfaceElementMap,
-          new Map(),
-          sm.scene,
-        );
+      updateStep("creating geometry");
+      console.info("[Viewport] Geometry creation started", { modelId });
+      mm.buildMesh(
+        nodeCoords_f64,
+        surfaceIndices,
+        surfaceNormals,
+        surfaceElementMap,
+        new Map(),
+        sm.scene,
+      );
 
-        const geom = mm.getBaseGeometry();
-        if (geom) {
-          wm.createWireframe(geom, sm.scene);
-        }
+      const geom = mm.getBaseGeometry();
+      if (geom) {
+        wm.createWireframe(geom, sm.scene);
+      }
 
-        sm.zoomToFit();
-        console.info("[Viewport] Geometry creation succeeded", { modelId });
-        console.info("[Viewport] Renderer init result", {
-          modelId,
-          nodeCount: nodeCoords_f64.length / 3,
-          triangleCount: surfaceIndices.length / 3,
-        });
+      sm.zoomToFit();
+      console.info("[Viewport] Geometry creation succeeded", { modelId });
+      console.info("[Viewport] Renderer init result", {
+        modelId,
+        nodeCount: nodeCoords_f64.length / 3,
+        triangleCount: surfaceIndices.length / 3,
+      });
 
-        updateStep("fetching panels");
-        const [metadataResult, treeResult, fieldsResult, setsResult] =
-          await Promise.allSettled([
-            metadataPromise,
-            treePromise,
-            fieldsPromise,
-            setsPromise,
-          ]);
+      updateStep("fetching panels");
+      const [metadataResult, treeResult, fieldsResult, setsResult] =
+        await Promise.allSettled([
+          metadataPromise,
+          treePromise,
+          fieldsPromise,
+          setsPromise,
+        ]);
 
-        if (metadataResult.status === "fulfilled") {
-          console.info("[Viewport] Metadata loaded", { modelId });
+      if (metadataResult.status === "fulfilled") {
+        console.info("[Viewport] Metadata loaded", { modelId });
+        if (!cancelled) {
           setMetadata(metadataResult.value.metadata);
           setWarnings(metadataResult.value.warnings ?? []);
-
-          if (
-            metadataResult.value.metadata.unit_system.declared_system ===
-            "unspecified"
-          ) {
-            useModelStore.getState().addWarning({
-              category: "Missing Units",
-              message: "Units not declared. Values shown without unit context.",
-              severity: "warning",
-              dismissible: false,
-            });
-          }
-        } else {
-          console.error("[Viewport] Non-blocking metadata fetch failure", {
-            modelId,
-            error: metadataResult.reason,
-          });
         }
 
-        if (treeResult.status === "fulfilled") {
-          console.info("[Viewport] Tree loaded", { modelId });
-          setTree(treeResult.value);
-        } else {
-          console.error("[Viewport] Non-blocking tree fetch failure", {
-            modelId,
-            error: treeResult.reason,
+        if (
+          metadataResult.value.metadata.unit_system.declared_system ===
+          "unspecified"
+        ) {
+          useModelStore.getState().addWarning({
+            category: "Missing Units",
+            message: "Units not declared. Values shown without unit context.",
+            severity: "warning",
+            dismissible: false,
           });
+        }
+      } else {
+        console.error("[Viewport] Non-blocking metadata fetch failure", {
+          modelId,
+          error: metadataResult.reason,
+        });
+      }
+
+      if (treeResult.status === "fulfilled") {
+        console.info("[Viewport] Tree loaded", { modelId });
+        if (!cancelled) {
+          setTree(treeResult.value);
+        }
+      } else {
+        console.error("[Viewport] Non-blocking tree fetch failure", {
+          modelId,
+          error: treeResult.reason,
+        });
+        if (!cancelled) {
           setTree({
             id: "assembly-root",
             name: "Assembly",
@@ -321,47 +363,77 @@ export const Viewport: React.FC<ViewportProps> = ({
             children: [],
           });
         }
+      }
 
-        if (fieldsResult.status === "fulfilled") {
-          console.info("[Viewport] Fields loaded", {
-            modelId,
-            count: fieldsResult.value.length,
-          });
+      if (fieldsResult.status === "fulfilled") {
+        console.info("[Viewport] Fields loaded", {
+          modelId,
+          count: fieldsResult.value.length,
+        });
+        if (!cancelled) {
           setFields(fieldsResult.value);
-          if (
-            fieldsResult.value.length > 0 &&
-            !useModelStore.getState().activeFieldId
-          ) {
-            setActiveFieldId(fieldsResult.value[0]!.id);
-          }
-        } else {
-          console.error("[Viewport] Non-blocking fields fetch failure", {
-            modelId,
-            error: fieldsResult.reason,
-          });
+        }
+        if (
+          fieldsResult.value.length > 0 &&
+          !useModelStore.getState().activeFieldId
+        ) {
+          setActiveFieldId(fieldsResult.value[0]!.id);
+        }
+      } else {
+        console.error("[Viewport] Non-blocking fields fetch failure", {
+          modelId,
+          error: fieldsResult.reason,
+        });
+        if (!cancelled) {
           setFields([]);
         }
+      }
 
-        if (setsResult.status === "fulfilled") {
+      if (setsResult.status === "fulfilled") {
+        if (!cancelled) {
           setSets(setsResult.value);
-        } else {
-          console.error("[Viewport] Non-blocking sets fetch failure", {
-            modelId,
-            error: setsResult.reason,
-          });
+        }
+      } else {
+        console.error("[Viewport] Non-blocking sets fetch failure", {
+          modelId,
+          error: setsResult.reason,
+        });
+        if (!cancelled) {
           setSets([]);
         }
+      }
 
+      if (!cancelled) {
         bootstrappedModelIdRef.current = modelId;
         setBootstrapLoaded();
-      } catch (error) {
-        failStep(useModelStore.getState().bootstrapStep ?? "bootstrap", error);
       }
     };
 
-    void loadModel();
+    console.info(`[Viewport] Status became ready for ${modelId}`);
+    console.info(`[Viewport] Bootstrap start for ${modelId}`);
+
+    void withBootstrapTimeout(loadModel, () => currentStep)
+      .catch((error) => {
+        if (error instanceof BootstrapTimeoutError) {
+          if (cancelled) return;
+          console.error("[Viewport] Bootstrap timeout", {
+            modelId,
+            step: error.step,
+            timeoutMs: error.timeoutMs,
+          });
+          setBootstrapError(
+            error.step,
+            `Bootstrap timed out after ${error.timeoutMs / 1000} seconds during ${error.step}`,
+          );
+          return;
+        }
+        failStep(currentStep, error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
-    bootstrapStatus,
     modelId,
     setActiveFieldId,
     setBootstrapError,
@@ -381,6 +453,21 @@ export const Viewport: React.FC<ViewportProps> = ({
   useEffect(() => {
     wireframeManagerRef.current?.setVisible(wireframeVisible);
   }, [wireframeVisible]);
+
+  useEffect(() => {
+    const mm = meshManagerRef.current;
+    if (!mm) return;
+
+    const entries = Object.entries(partVisibility);
+    if (entries.length === 0) {
+      mm.showAll();
+      return;
+    }
+
+    for (const [partId, visible] of entries) {
+      mm.setPartVisible(partId, visible);
+    }
+  }, [partVisibility]);
 
   if (!webglAvailable) {
     return (

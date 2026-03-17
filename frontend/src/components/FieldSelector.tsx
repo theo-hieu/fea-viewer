@@ -19,6 +19,7 @@ export const FieldSelector: React.FC = () => {
     return (
         <div className="field-selector">
             <select
+                aria-label="Result field"
                 value={activeFieldId ?? ''}
                 onChange={(e) => setActiveFieldId(e.target.value || null)}
             >

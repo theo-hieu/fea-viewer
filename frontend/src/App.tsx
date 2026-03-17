@@ -22,6 +22,7 @@ import { InfoPanel } from '@/components/InfoPanel';
 import { MetadataPanel } from '@/components/MetadataPanel';
 import { WarningBanner } from '@/components/WarningBanner';
 import { monitorModelStatus } from '@/api/models';
+import { useViewStore } from '@/store/viewStore';
 
 const App: React.FC = () => {
     const requestedModelId = new URLSearchParams(window.location.search).get('modelId');
@@ -40,17 +41,19 @@ const App: React.FC = () => {
     const setParseProgress = useModelStore((s) => s.setParseProgress);
     const resetModel = useModelStore((s) => s.resetModel);
     const setBootstrapIdle = useModelStore((s) => s.setBootstrapIdle);
+    const resetView = useViewStore((s) => s.resetView);
 
     useEffect(() => {
         if (!requestedModelId || modelId === requestedModelId) return;
 
         console.info(`[App] Detected modelId from URL: ${requestedModelId}`);
         resetModel();
+        resetView();
         setModelId(requestedModelId);
         setParseProgress(0);
         setErrorMessage(null);
         setBootstrapIdle();
-    }, [modelId, requestedModelId, resetModel, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress]);
+    }, [modelId, requestedModelId, resetModel, resetView, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress]);
 
     useEffect(() => {
         if (!modelId) return;

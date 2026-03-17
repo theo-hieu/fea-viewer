@@ -5,13 +5,19 @@
  * Per 04 §3.1: assembly → instances → parts → sets, with show/hide/isolate.
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useModelStore } from '@/store/modelStore';
 import { useViewStore } from '@/store/viewStore';
 import type { TreeNode } from '@/utils/feaTypes';
 
 export const ModelTree: React.FC = () => {
     const tree = useModelStore((s) => s.tree);
+    const registerPartIds = useViewStore((s) => s.registerPartIds);
+
+    useEffect(() => {
+        if (!tree) return;
+        registerPartIds(collectPartIds(tree));
+    }, [registerPartIds, tree]);
 
     if (!tree) {
         return <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>No model loaded</div>;
@@ -75,3 +81,20 @@ const TreeNodeComponent: React.FC<{ node: TreeNode; depth: number }> = ({ node, 
         </div>
     );
 };
+
+function collectPartIds(node: TreeNode): string[] {
+    const partIds: string[] = [];
+    const stack: TreeNode[] = [node];
+
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (current.type === 'part') {
+            partIds.push(current.id);
+        }
+        if (current.children) {
+            stack.push(...current.children);
+        }
+    }
+
+    return partIds;
+}

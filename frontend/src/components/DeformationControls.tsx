@@ -40,6 +40,7 @@ export const DeformationControls: React.FC = () => {
             {/* Field selector */}
             <div className="field-selector">
                 <select
+                    aria-label="Deformation field"
                     value={deformFieldId ?? ''}
                     onChange={(e) => setDeformFieldId(e.target.value || null)}
                     disabled={!hasDisplacement}

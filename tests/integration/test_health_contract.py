@@ -9,11 +9,11 @@ README = (REPO_ROOT / "README.md").read_text()
 
 
 def _assert_probe_safe_health_routing(conf: str, upstream_var: str, *, has_spa_fallback: bool) -> None:
-    assert "listen 443" not in conf
     assert "location = /health {" in conf
     assert f"proxy_pass ${upstream_var}_health_upstream;" in conf
     assert "location = /health/ready {" in conf
     assert f"proxy_pass ${upstream_var}_health_ready_upstream;" in conf
+    assert "listen       443 ssl;" in conf
     if has_spa_fallback:
         assert "try_files $uri $uri/ /index.html;" in conf
 
@@ -23,16 +23,16 @@ def test_runtime_nginx_health_routes_bypass_spa_fallback():
 
 
 def test_deploy_nginx_health_routes_bypass_spa_fallback():
-    _assert_probe_safe_health_routing(DEPLOY_NGINX_CONF, "backend", has_spa_fallback=False)
+    _assert_probe_safe_health_routing(DEPLOY_NGINX_CONF, "api", has_spa_fallback=True)
 
 
-def test_compose_exposes_only_http_without_tls_listener():
+def test_compose_exposes_http_and_https():
     assert '"80:80"' in DOCKER_COMPOSE
-    assert '"443:443"' not in DOCKER_COMPOSE
+    assert '"443:443"' in DOCKER_COMPOSE
 
 
-def test_readme_documents_canonical_health_contract_and_http_only_local_stack():
+def test_readme_documents_canonical_health_contract_and_local_https_stack():
     assert "http://localhost/api/v1/health" in README
     assert "http://localhost/api/v1/health/ready" in README
-    assert "HTTPS is not exposed in" in README
-    assert "443:443" not in README
+    assert "https://localhost" in README
+    assert "self-signed development certificate" in README

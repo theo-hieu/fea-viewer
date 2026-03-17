@@ -1,12 +1,16 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
-import { Viewport } from '@/components/Viewport';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { ModelTree } from '@/components/ModelTree';
+import { Viewport, BOOTSTRAP_TIMEOUT_MS } from '@/components/Viewport';
 import { useModelStore } from '@/store/modelStore';
+import { useViewStore } from '@/store/viewStore';
 
 const spies = vi.hoisted(() => ({
     buildMesh: vi.fn(),
     createWireframe: vi.fn(),
+    setPartVisible: vi.fn(),
+    showAll: vi.fn(),
     zoomToFit: vi.fn(),
     fetchBinary: vi.fn(),
     fetchSurfacesBinary: vi.fn(),
@@ -61,6 +65,12 @@ vi.mock('@/three/MeshManager', () => ({
         buildMesh(...args: unknown[]) {
             spies.buildMesh(...args);
         }
+        setPartVisible(...args: unknown[]) {
+            spies.setPartVisible(...args);
+        }
+        showAll() {
+            spies.showAll();
+        }
         getBaseGeometry() {
             return {};
         }
@@ -109,6 +119,7 @@ describe('Viewport bootstrap with surfaces payload', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         useModelStore.getState().reset();
+        useViewStore.getState().resetView();
 
         const nodeCoords = new Float64Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
         (spies.fetchBinary as Mock).mockResolvedValue({
@@ -147,6 +158,10 @@ describe('Viewport bootstrap with surfaces payload', () => {
         useModelStore.getState().setStatus('ready');
     });
 
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     it('builds mesh when surfaces parse succeeds', async () => {
         (spies.fetchSurfacesBinary as Mock).mockResolvedValue({
             surfaceIndices: new Int32Array([0, 1, 2]),
@@ -169,6 +184,24 @@ describe('Viewport bootstrap with surfaces payload', () => {
 
         expect(useModelStore.getState().status).toBe('ready');
         expect(useModelStore.getState().bootstrapStatus).toBe('loaded');
+    });
+
+    it('surfaces a terminal bootstrap timeout when geometry fetch never resolves', async () => {
+        vi.useFakeTimers();
+        (spies.fetchSurfacesBinary as Mock).mockImplementation(
+            () => new Promise(() => undefined),
+        );
+
+        render(React.createElement(Viewport));
+
+        await act(async () => {
+            await vi.advanceTimersByTimeAsync(BOOTSTRAP_TIMEOUT_MS);
+        });
+
+        expect(useModelStore.getState().bootstrapStatus).toBe('error');
+        expect(useModelStore.getState().status).toBe('error');
+        expect(useModelStore.getState().errorMessage).toContain('Bootstrap timed out');
+        expect(useModelStore.getState().errorMessage).toContain('fetching geometry');
     });
 
     it('sets explicit error state when surfaces parsing fails', async () => {
@@ -236,6 +269,61 @@ describe('Viewport bootstrap with surfaces payload', () => {
             name: 'Assembly',
             type: 'assembly',
             children: [],
+        });
+    });
+
+    it('wires tree visibility actions to mesh visibility updates', async () => {
+        (spies.fetchSurfacesBinary as Mock).mockResolvedValue({
+            surfaceIndices: new Int32Array([0, 1, 2]),
+            surfaceNormals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+            surfaceElementMap: new Int32Array([0]),
+            headers: {
+                dtype: 'mixed',
+                shape: { indices: [3], normals: [9], map: [1] },
+                byteOrder: 'little',
+                offsets: { indices: [0, 12], normals: [12, 48], map: [48, 52] },
+            },
+        });
+        (spies.fetchModelTree as Mock).mockResolvedValue({
+            id: 'assembly-root',
+            name: 'Assembly',
+            type: 'assembly',
+            children: [
+                { id: 'part-a', name: 'Part A', type: 'part', children: [] },
+                { id: 'part-b', name: 'Part B', type: 'part', children: [] },
+            ],
+        });
+
+        render(
+            React.createElement(
+                React.Fragment,
+                null,
+                React.createElement(Viewport),
+                React.createElement(ModelTree),
+            ),
+        );
+
+        await waitFor(() => {
+            expect(useModelStore.getState().bootstrapStatus).toBe('loaded');
+        });
+
+        expect(useViewStore.getState().partVisibility).toEqual({
+            'part-a': true,
+            'part-b': true,
+        });
+
+        fireEvent.click(screen.getAllByTitle('Hide')[0]!);
+
+        await waitFor(() => {
+            expect(spies.setPartVisible).toHaveBeenCalledWith('part-a', false);
+        });
+
+        const isolateButtons = screen.getAllByTitle('Isolate');
+        fireEvent.click(isolateButtons[1]!);
+
+        await waitFor(() => {
+            expect(spies.setPartVisible).toHaveBeenCalledWith('part-a', false);
+            expect(spies.setPartVisible).toHaveBeenCalledWith('part-b', true);
         });
     });
 });

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -14,7 +16,7 @@ class _ConnectionContext:
     def __enter__(self) -> _Connection:
         return _Connection()
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> Literal[False]:
         return False
 
 

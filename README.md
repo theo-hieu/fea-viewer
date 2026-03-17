@@ -16,14 +16,17 @@ The easiest way to run the entire stack (Frontend, Backend, Database, Cache, Sto
     docker compose up --build
     ```
 3.  **Access the application:**
-    - **Frontend:** [http://localhost](http://localhost)
+    - **Frontend (HTTP):** [http://localhost](http://localhost)
+    - **Frontend (HTTPS, self-signed):** [https://localhost](https://localhost)
     - **API Health (liveness):** [http://localhost/api/v1/health](http://localhost/api/v1/health)
     - **API Health (readiness):** [http://localhost/api/v1/health/ready](http://localhost/api/v1/health/ready)
     - **MinIO Console (Storage):** [http://localhost:9001](http://localhost:9001) (User: `minioadmin`, Pass: `minioadmin`)
 
-The Docker Compose nginx service listens on `80` only. HTTPS is not exposed in
-this local stack. For ingress/container probes, nginx also proxies `/health`
-and `/health/ready` to the canonical API health endpoints above.
+The Docker Compose nginx service listens on both `80` and `443`. The local TLS
+endpoint uses the repository's self-signed development certificate, so your
+browser will warn until you trust it locally. For ingress/container probes,
+nginx also proxies `/health` and `/health/ready` to the canonical API health
+endpoints above.
 
 ---
 
@@ -136,7 +139,8 @@ docker run --rm -v "$PWD/backend:/app" -w /app fea-viewer-backend:test pytest te
 ```bash
 cd frontend
 npm test          # Unit tests
-npx playwright test  # E2E tests
+npm run test:e2e:install  # one-time browser install
+npm run test:e2e          # E2E tests
 ```
 
 ### CI Commands

@@ -351,14 +351,15 @@ def test_field_data_timestep_streaming_bounds_check(clean_app):
     db.models["m1"] = {"status": "ready"}
     db.fields["m1"] = [{"id": "f1", "timestep_count": 2, "components": 1}]
     
-    storage.blobs["models/m1/fields/f1/step_0.f64"] = b"STEP0"
+    payload = struct.pack("<d", 12.5)
+    storage.blobs["models/m1/fields/f1/step_0.f64"] = payload
     
     # Step 0 works
     resp = client.get("/api/v1/models/m1/fields/f1/data?step=0")
     assert resp.status_code == 200
-    assert resp.content == b"STEP0"
+    assert resp.content == payload
     assert resp.headers.get("X-Array-Dtype") == "float64"
-    assert resp.headers.get("X-Array-Shape") == "[5]"
+    assert resp.headers.get("X-Array-Shape") == "[1]"
 
     # Step 2 fails out of bounds explicit error
     resp = client.get("/api/v1/models/m1/fields/f1/data?step=2")
@@ -436,3 +437,4 @@ def test_delete_model(clean_app):
     
     # S3 isolation protected
     assert "models/m2/geometry/nodes.f64" in storage.blobs
+import struct

@@ -8,6 +8,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { useModelStore } from '@/store/modelStore';
 import { uploadFile } from '@/api/client';
+import { useViewStore } from '@/store/viewStore';
 
 export const UploadPanel: React.FC = () => {
     const status = useModelStore((s) => s.status);
@@ -22,11 +23,13 @@ export const UploadPanel: React.FC = () => {
     const setErrorMessage = useModelStore((s) => s.setErrorMessage);
     const resetModel = useModelStore((s) => s.resetModel);
     const setBootstrapIdle = useModelStore((s) => s.setBootstrapIdle);
+    const resetView = useViewStore((s) => s.resetView);
     const [isDragOver, setIsDragOver] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
 
     const handleFile = useCallback(async (file: File) => {
         resetModel();
+        resetView();
         setStatus('uploading');
         setUploadProgress(0);
         setParseProgress(0);
@@ -44,7 +47,7 @@ export const UploadPanel: React.FC = () => {
             setStatus('error');
             setErrorMessage(err instanceof Error ? err.message : 'Upload failed');
         }
-    }, [resetModel, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress, setStatus, setUploadProgress]);
+    }, [resetModel, resetView, setBootstrapIdle, setErrorMessage, setModelId, setParseProgress, setStatus, setUploadProgress]);
 
     const onDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault();
@@ -83,6 +86,7 @@ export const UploadPanel: React.FC = () => {
                         ref={inputRef}
                         type="file"
                         accept=".vtk,.vtu,.vtp,.pvtu"
+                        aria-label="FEA file upload"
                         style={{ display: 'none' }}
                         onChange={onFileSelect}
                     />

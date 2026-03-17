@@ -1,16 +1,16 @@
-import json
-from contextlib import asynccontextmanager, contextmanager
-from typing import Any, AsyncGenerator
+from contextlib import contextmanager
+from typing import Any
 import threading
 
-from sqlalchemy import Column, String, Integer, Float, JSON, ForeignKey
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy import JSON, Column, ForeignKey, Integer, String, create_engine
+from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 
 from app.config import settings
 from app.api.v1.routes_models import ApiMetadataStore
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy Models
@@ -63,12 +63,6 @@ class NamedSetRow(Base):
     model = relationship("ModelRow", back_populates="sets")
 
 
-# ---------------------------------------------------------------------------
-# Database Engine & Session
-# ---------------------------------------------------------------------------
-
-from sqlalchemy import create_engine
-
 # Use psycopg2 synchronous engine to match MVP requirements
 engine = create_engine(settings.DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
@@ -88,7 +82,7 @@ class PostgresMetadataStore(ApiMetadataStore):
         # Create tables if they do not exist
         try:
             Base.metadata.create_all(self._engine)
-        except Exception as e:
+        except Exception:
             # Expected to fail if DB is not up yet
             pass
 
@@ -121,7 +115,8 @@ class PostgresMetadataStore(ApiMetadataStore):
     def get_model(self, model_id: str) -> dict[str, Any] | None:
         with self._get_session() as session:
             row = session.get(ModelRow, model_id)
-            if not row: return None
+            if not row:
+                return None
             props = row.properties or {}
             return {
                 "id": row.id,
@@ -184,7 +179,8 @@ class PostgresMetadataStore(ApiMetadataStore):
     def get_field(self, model_id: str, field_id: str) -> dict[str, Any] | None:
         with self._get_session() as session:
             f = session.query(ResultFieldRow).filter_by(model_id=model_id, id=field_id).first()
-            if not f: return None
+            if not f:
+                return None
             return {"id": f.id, "name": f.name, "location": f.location, "components": f.components, "timestep_count": f.timestep_count}
 
     def get_sets(self, model_id: str) -> list[dict[str, Any]]:
@@ -195,7 +191,8 @@ class PostgresMetadataStore(ApiMetadataStore):
     def get_set(self, model_id: str, set_id: str) -> dict[str, Any] | None:
         with self._get_session() as session:
             s = session.query(NamedSetRow).filter_by(model_id=model_id, id=set_id).first()
-            if not s: return None
+            if not s:
+                return None
             return {"id": s.id, "name": s.name, "entity_type": s.entity_type, "member_count": s.member_count}
 
     def delete_model(self, model_id: str) -> None:
