@@ -1,0 +1,44 @@
+# Git
+.git
+.github
+.gitignore
+
+# Docker
+.dockerignore
+docker-compose.yml
+Dockerfile
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+backend/error.log
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Backend (Python)
+backend/venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.pytest_tmp/
+backend/pytest-cache-files-*/
+backend/pytest-tmp/
+backend/fea_viewer_backend.egg-info/
+backend/alembic/versions/*.pyc
+
+# Frontend (Node.js)
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/*.tsbuildinfo
+
+# Tests and other
+tests/
+docs/
+.pytest-tmp/
