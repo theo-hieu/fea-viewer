@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import redis
 from app.parsing.detect import (
@@ -53,13 +53,14 @@ from app.config import settings
 from app.tasks.celery_app import celery_app
 from app.tasks.task_failure_handler import write_terminal_failure
 
-try:
-    from billiard.exceptions import WorkerLostError as _WorkerLostError
-except Exception:  # pragma: no cover - fallback for stripped test environments
-    class _WorkerLostError(RuntimeError):
-        pass
-
-WorkerLostError = _WorkerLostError
+if TYPE_CHECKING:
+    from billiard.exceptions import WorkerLostError
+else:
+    try:
+        from billiard.exceptions import WorkerLostError
+    except Exception:  # pragma: no cover - fallback for stripped test environments
+        class WorkerLostError(RuntimeError):
+            pass
 
 try:
     from celery.signals import task_failure
