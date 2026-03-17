@@ -13,6 +13,11 @@ from app.tasks.parse_task import ParseJobResult
 from app.tasks.parse_task import TASK_WORKER_LOST_CODE
 from app.tasks.parse_task import WorkerLostError
 
+
+def audit_artifact_path(name: str) -> Path:
+    return Path(__file__).resolve().parents[1] / "audit-artifacts" / name
+
+
 class DummyStorage:
     def __init__(self, initial_objects=None):
         self.blobs = dict(initial_objects or {})
@@ -176,7 +181,7 @@ def test_process_upload_missing_file(mock_pub, mock_s3, mock_db):
 @mock.patch("app.tasks.parse_task.run_parse_job")
 def test_corrupted_vtu_stays_raw_only_and_transitions_to_error(mock_run, mock_pub, mock_s3, mock_db):
     db_inst = DummyDB()
-    broken_bytes = Path("/home/lev52808/projects/fea-viewer/backend/tests/audit-artifacts/audit_broken.vtu").read_bytes()
+    broken_bytes = audit_artifact_path("audit_broken.vtu").read_bytes()
     raw_key = "uploads/model-corrupt/raw/audit_broken.vtu"
     storage_inst = DummyStorage({raw_key: broken_bytes})
 

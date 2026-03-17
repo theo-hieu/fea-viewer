@@ -126,6 +126,10 @@ def write_pickled_payload(path: Path, value) -> None:
         pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def audit_artifact_path(name: str) -> Path:
+    return Path(__file__).resolve().parents[1] / "audit-artifacts" / name
+
+
 # ===================================================================
 # 1. Successful parse — progress events & status
 # ===================================================================
@@ -239,7 +243,7 @@ class TestParseFailure:
     """When parser returns ParseError."""
 
     def test_corrupted_vtu_supervisor_exit_transitions_to_error(self):
-        filepath = "/home/lev52808/projects/fea-viewer/backend/tests/audit-artifacts/audit_broken.vtu"
+        filepath = str(audit_artifact_path("audit_broken.vtu"))
         events: list[ProgressEvent] = []
 
         with mock.patch("app.tasks.parse_task.run_parse_subprocess") as mock_subprocess:
@@ -565,4 +569,11 @@ class TestParseSubprocessSupervisor:
         with mock.patch("app.tasks.parse_task.subprocess.run", side_effect=fake_run):
             result = run_parse_subprocess("/tmp/model.vtu", "model.vtu")
 
-        assert result.payload == expected
+        assert result.payload is not None
+        assert result.payload.node_count == expected.node_count
+        assert result.payload.element_count == expected.element_count
+        assert result.payload.field_count == expected.field_count
+        assert result.payload.parser_backend == expected.parser_backend
+        assert np.array_equal(result.payload.points, expected.points)
+        assert result.payload.metadata == expected.metadata
+        assert result.payload.warnings == expected.warnings
